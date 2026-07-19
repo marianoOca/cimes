@@ -141,3 +141,19 @@ export function mirrorConversationOpen(db: DB, lead: Lead): void {
     status: "open",
   });
 }
+
+/**
+ * New inbound on a resolved (archived) conversation reopens it (03 §2):
+ * back to pending (bot resumes) unless derivado/terminal — then open.
+ */
+export function reopenIfArchived(db: DB, lead: Lead): void {
+  if (!lead.archived) return;
+  const humanOwned = lead.labels.includes("derivado") || !lead.ai_enabled;
+  updateLead(db, lead.lead_id, { archived: false });
+  if (chatwootConfigured()) {
+    enqueue(db, "chatwoot_mirror_status", new Date(), {
+      lead_id: lead.lead_id,
+      status: humanOwned ? "open" : "pending",
+    });
+  }
+}

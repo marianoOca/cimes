@@ -190,6 +190,15 @@ describe("conversation engine — Flow A happy path (deterministic, no AI)", () 
     expect(texts.some((t) => t.includes("texto"))).toBe(true);
   });
 
+  it("inbound on an archived conversation unarchives it (03 §2 reopen)", async () => {
+    const db = openDb(":memory:");
+    await handleInbound(db, inbound({ content: "hola" }));
+    const lead = getLeadByPhone(db, "5491100000042")!;
+    db.prepare("UPDATE leads SET archived = 1 WHERE lead_id = ?").run(lead.lead_id);
+    await handleInbound(db, inbound({ kind: "list", content: "city:luján", title: "Luján" }));
+    expect(getLeadByPhone(db, "5491100000042")!.archived).toBe(false);
+  });
+
   it("human-owned conversations (ai_enabled=false) get no auto-reply", async () => {
     const db = openDb(":memory:");
     await handleInbound(db, inbound({ content: "hola" }));

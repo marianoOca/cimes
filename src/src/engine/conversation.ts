@@ -21,7 +21,7 @@ import { COVERED_CITIES, isCoveredCity, runCoverageForLead } from "./coverage.js
 import { enqueueForLead } from "./leadQueue.js";
 import { onLeadReply, scheduleFollowups } from "../engines/followups.js";
 import { confirmOrder } from "../pipeline/orders.js";
-import { mirrorLeadSync, mirrorMessage } from "../crm/mirror.js";
+import { mirrorLeadSync, mirrorMessage, reopenIfArchived } from "../crm/mirror.js";
 import type { CoverageResult, PricedCatalog } from "../providers/types.js";
 
 function normalizeText(s: string): string {
@@ -323,6 +323,9 @@ async function processInbound(db: DB, msg: NormalizedInbound): Promise<void> {
     metadata: { text: msg.content || msg.title || `[${msg.kind}]`, kind: msg.kind },
   });
   mirrorMessage(db, lead, "in", msg.content || msg.title || `[${msg.kind}]`);
+
+  // Inbound on an archived conversation reopens it (03 §2).
+  reopenIfArchived(db, lead);
 
   // A reply cancels pending follow-up timers and resets the counter (01 §7).
   onLeadReply(db, lead);

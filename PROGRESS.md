@@ -5,8 +5,10 @@
 Day-1 scaffold done. Backend (core-api + chatbot, `src/`) AND website (`website/`,
 Flow B) built: typecheck clean, 37 tests passing (32 backend + 5 website DOM tests
 driving the real wizard in jsdom against a stubbed API). Not yet run against real
-Kapso/WaterService — external credentials pending from the client. Chatwoot deploy
-(`03`/ops) not started.
+Kapso/WaterService — external credentials pending from the client. Ops artifacts done
+(`ops/DEPLOY.md`, `ops/chatwoot/` compose + wiring guide); actual VPS/Chatwoot deploy
+happens when the client's infra is available. All four module docs (01/02/03/04) now
+have their build counterpart; test count 38.
 
 ## Last session (2026-07-19)
 
@@ -54,8 +56,13 @@ Kapso/WaterService — external credentials pending from the client. Chatwoot de
   `config.js` holds `API_BASE_URL` + `WHATSAPP_NUMBER_SALES`. Verified via jsdom tests
   (`src/test/website.test.ts`).
 
+- Ops (`docs/03-crm.md` deploy side): `ops/chatwoot/docker-compose.yml` + `.env.example`
+  + `WIRING.md` (inbox creation, labels/attributes with exact slugs, acceptance steps);
+  `ops/DEPLOY.md` (backend systemd + reverse proxy, Hostinger upload, day-1 client
+  tasks). Backend gap closed: inbound on a resolved/archived conversation reopens it
+  (`pending`, or `open` when `derivado`) — `reopenIfArchived` in `src/crm/mirror.ts`.
+
 **Next:**
-- Ops: Chatwoot compose + wiring (`docs/03-crm.md`), VPS deploy notes.
 - On deploy: paste the client's GTM container into `website/index.html`, set real
   `config.js` values, measure mobile Lighthouse (≥90 acceptance — site is lean vanilla,
   measure on the deployed URL).
