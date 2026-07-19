@@ -2,10 +2,11 @@
 
 ## Current status
 
-Day-1 scaffold done. Backend (core-api + chatbot, `src/`) built end-to-end: typecheck
-clean, 32 tests passing. Not yet run against real Kapso/WaterService — all external
-credentials still pending from the client. Website (`04`) and Chatwoot deploy (`03`/ops)
-not started.
+Day-1 scaffold done. Backend (core-api + chatbot, `src/`) AND website (`website/`,
+Flow B) built: typecheck clean, 37 tests passing (32 backend + 5 website DOM tests
+driving the real wizard in jsdom against a stubbed API). Not yet run against real
+Kapso/WaterService — external credentials pending from the client. Chatwoot deploy
+(`03`/ops) not started.
 
 ## Last session (2026-07-19)
 
@@ -43,9 +44,21 @@ not started.
   dispatch, conversation Flow A e2e (guided + free-text fast path, dedupe, media
   fallback, ai_enabled gate).
 
+- Website (`docs/04-website.md`) complete in `website/`: static vanilla HTML/CSS/JS,
+  mobile-first, competitor structure cloned (hero, dual CTA, on-page wizard, 3 steps,
+  priceless product grid + WhatsApp CTAs, trust, coverage, testimonial placeholders,
+  footer, floating WhatsApp widget); own `copy.es-AR.js`; wizard = Flow B
+  (city → priced catalog → validated data form → live coverage/day picker → summary →
+  confirm, double-click guarded, polite no-coverage paths); `privacy.html` (Meta lead-ads
+  prerequisite), SEO meta/OG/JSON-LD LocalBusiness/sitemap/robots, GTM slot marked;
+  `config.js` holds `API_BASE_URL` + `WHATSAPP_NUMBER_SALES`. Verified via jsdom tests
+  (`src/test/website.test.ts`).
+
 **Next:**
-- Website (`docs/04-website.md`) — static site + wizard against the REST endpoints.
 - Ops: Chatwoot compose + wiring (`docs/03-crm.md`), VPS deploy notes.
+- On deploy: paste the client's GTM container into `website/index.html`, set real
+  `config.js` values, measure mobile Lighthouse (≥90 acceptance — site is lean vanilla,
+  measure on the deployed URL).
 - Observability leftovers (01 §10.2): daily summary toggle + cost-counter cron not
   built yet — needs client thresholds.
 - When credentials arrive: create + publish the delivery-data WhatsApp Flow in Kapso
