@@ -62,6 +62,47 @@ describe("Kapso webhook", () => {
     expect(media?.kind).toBe("media");
   });
 
+  it("normalizes the v2 payload shape (sender in conversation.phone_number)", () => {
+    // Kapso payload_version v2: the message object has NO `from`; the sender
+    // phone is conversation.phone_number and the profile name is under
+    // conversation.kapso.contact_name (integrate-whatsapp webhooks-event-types).
+    const n = normalizeInbound({
+      phone_number_id: "PN1",
+      message: {
+        id: "wamid.v2",
+        type: "text",
+        text: { body: "hola" },
+        kapso: { direction: "inbound" },
+      },
+      conversation: {
+        phone_number: "+5491122223333",
+        kapso: { contact_name: "Juan Pérez" },
+      },
+      is_new_conversation: true,
+    });
+    expect(n).toMatchObject({
+      messageId: "wamid.v2",
+      from: "+5491122223333",
+      kind: "text",
+      content: "hola",
+      contactName: "Juan Pérez",
+    });
+  });
+
+  it("drops outbound echoes (sent/delivered/failed share the inbound shape)", () => {
+    const echo = normalizeInbound({
+      phone_number_id: "PN1",
+      message: {
+        id: "wamid.out",
+        type: "text",
+        text: { body: "On my way" },
+        kapso: { direction: "outbound" },
+      },
+      conversation: { phone_number: "+5491122223333" },
+    });
+    expect(echo).toBeNull();
+  });
+
   it("returns null for non-message events", () => {
     expect(normalizeInbound({ event_type: "whatsapp.conversation.ended" })).toBeNull();
   });

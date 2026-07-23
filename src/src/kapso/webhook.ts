@@ -16,11 +16,16 @@ export function verifyKapsoSignature(
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Kapso payload_version v2 (integrate-whatsapp/references/webhooks-event-types.md):
+// the message object carries NO `from` — the sender phone is
+// `conversation.phone_number`, and direction is `message.kapso.direction`.
+// `from` is accepted too, only as a fallback for the older/raw-Meta shape.
 const inboundMessage = z.object({
   id: z.string(),
-  from: z.string(),
+  from: z.string().nullish(),
   type: z.string().optional().default("text"),
   text: z.object({ body: z.string() }).nullish(),
+  kapso: z.object({ direction: z.string().nullish() }).nullish(),
   interactive: z
     .object({
       type: z.string(),
@@ -32,8 +37,14 @@ const inboundMessage = z.object({
 });
 
 const webhookEvent = z.object({
-  event_type: z.string().optional(),
   message: inboundMessage.optional(),
+  // Top-level in v2; sender + contact name live here, not on the message.
+  conversation: z
+    .object({
+      phone_number: z.string().nullish(),
+      kapso: z.object({ contact_name: z.string().nullish() }).nullish(),
+    })
+    .nullish(),
   phone_number_id: z.string().optional(),
 });
 
@@ -50,19 +61,29 @@ export interface NormalizedInbound {
   title?: string;
   /** Parsed WhatsApp Flow (delivery-data form) response, if any. */
   flowResponse?: Record<string, unknown>;
+  /** WhatsApp profile name, for pre-filling the lead name (02 §5 datos_entrega). */
+  contactName?: string;
 }
 
 const MEDIA_TYPES = new Set(["image", "video", "audio", "document", "location", "sticker"]);
 
-/** Returns null for events that carry no inbound customer message. */
+/**
+ * Returns null for events that carry no inbound customer message. The same
+ * top-level shape is used for sent/delivered/failed echoes — gate on
+ * `message.kapso.direction` so we never treat our own outbound as inbound.
+ */
 export function normalizeInbound(payload: unknown): NormalizedInbound | null {
   const parsed = webhookEvent.safeParse(payload);
   if (!parsed.success || !parsed.data.message) return null;
   const msg = parsed.data.message;
+  if (msg.kapso?.direction && msg.kapso.direction !== "inbound") return null;
+  const from = parsed.data.conversation?.phone_number ?? msg.from ?? "";
+  if (!from) return null;
   const base = {
     messageId: msg.id,
-    from: msg.from,
+    from,
     phoneNumberId: parsed.data.phone_number_id ?? "",
+    contactName: parsed.data.conversation?.kapso?.contact_name ?? undefined,
   };
 
   if (msg.interactive?.button_reply) {
@@ -81,6 +102,9 @@ export function normalizeInbound(payload: unknown): NormalizedInbound | null {
       title: msg.interactive.list_reply.title,
     };
   }
+  // NOTE: the nfm_reply.response_json path is raw-Meta and plausible, but the
+  // v2 webhook refs do not document flow completions — verify against a real
+  // flow-completion capture (send-test-flow.js) before relying on it.
   if (msg.interactive?.nfm_reply) {
     let flowResponse: Record<string, unknown> = {};
     try {

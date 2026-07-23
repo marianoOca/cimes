@@ -154,3 +154,39 @@ writing a local config file.
 **Fixed:** `src/.env` existed but nothing loaded it (no `dotenv`, no
 `--env-file`). Added `--env-file=.env` to the `dev`/`start` scripts
 (`src/package.json`) — native Node 22 flag, no new dependency.
+
+## Session (2026-07-23, cont.) — Kapso skills assessed + inbound-webhook bug fixed
+
+Installed Kapso skills (`~/.agents/skills/`, agent-scoped not project files):
+- **integrate-whatsapp** = the transport layer (setup links, webhooks, send
+  messages/templates/media, WhatsApp Flows create/publish/data-endpoints). This
+  is the half we use. Directly relevant scripts: `create-flow.js` +
+  `publish-flow.js` (delivery-data Flow → `KAPSO_DELIVERY_FLOW_ID`),
+  `create-template.mjs`/`submit-template.mjs` + `template-status.mjs` (the 3
+  utility templates), `create.js` (webhooks), `list-platform-phone-numbers.mjs`
+  (get phone_number_id + WABA).
+- **automate-whatsapp** = builds the brain INSIDE Kapso (workflow graphs, agent
+  nodes with a Kapso-side LLM, hosted Cloudflare functions, Project Events).
+  Conflicts with our architecture (00 §3: Kapso = transport only, our backend is
+  the brain, Claude via Anthropic SDK). Use only as a map of what NOT to build;
+  the one useful pattern is `inbound_message` trigger → webhook node forwarding
+  to our backend. Do not adopt agent/decide/function nodes.
+
+**BUG FOUND + FIXED (was dead-on-arrival):** `kapso/webhook.ts` parsed inbound
+against `message.from`, but Kapso's **payload_version v2** (authoritative:
+`integrate-whatsapp/references/webhooks-event-types.md`) has no `message.from` —
+the sender is `conversation.phone_number`. Every real inbound failed zod parse →
+`normalizeInbound` returned null → the bot would never have replied to anyone.
+The online docs page I originally built from showed the older/simplified shape.
+Fix: schema now reads `conversation.phone_number` (keeps `message.from` as
+fallback), gates on `message.kapso.direction === "inbound"` to drop
+sent/delivered/failed echoes, drops the dead body `event_type` (event name is in
+the `X-Webhook-Event` header), and pre-fills lead name from
+`conversation.kapso.contact_name`. Added 2 regression tests (v2 shape + outbound
+echo). Flow `nfm_reply` path left in but flagged unverified — confirm with
+`send-test-flow.js` against a real flow-completion capture.
+
+Outbound send (`kapso/send.ts`) verified correct against the reference: base URL,
+`X-API-Key`, `/{phone_number_id}/messages`, and all body shapes
+(text/buttons/list/flow/template) match. Both signature schemes (Kapso
+`X-Webhook-Signature` raw-body HMAC; Meta `sha256=`) correct.

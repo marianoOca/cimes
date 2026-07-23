@@ -302,6 +302,8 @@ async function processInbound(db: DB, msg: NormalizedInbound): Promise<void> {
   const { lead: created, created: isNew } = getOrCreateLead(db, {
     phone: msg.from,
     source: "whatsapp",
+    // Pre-fill name from the WhatsApp profile when present (02 §5 datos_entrega).
+    name: msg.contactName,
   });
   let lead = created;
   if (isNew) {
