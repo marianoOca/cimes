@@ -7,7 +7,7 @@ endpoint contracts: `docs/00-master.md §5.6`.
 ## Process
 
 - v1 design copies the competitor site (https://aguaivess.rosmino.com.ar/) exactly,
-  with CIMES logo (`documentation/logo-cimes.png`). No redesign scope.
+  with CIMES logo (`assets/logo-cimes.png`, sourced from `docs/logo-cimes.png`). No redesign scope.
 - All copy in Argentine Spanish (voseo), sourced/mirrored from the es-AR copy module keys.
 - Backend base URL via `API_BASE_URL` (build-time constant for the static site).
 - Must include a privacy-policy page (Meta lead-ads prerequisite — `docs/02-chatbot.md §7`).

@@ -116,3 +116,41 @@ have their build counterpart; test count 38.
 - Sales/support number-to-flow assignment — confirm with client before go-live.
 - Delivery-data Flow field names assumed `nombre/apellido/calle/altura/entre_calles/
   notas` — align when the Flow is actually built in Kapso.
+
+## Session (2026-07-23)
+
+**Repo housekeeping — `documentation/` merged into `docs/`:** the old
+`documentation/` folder (raw source material: PRD, WaterService manual,
+transcript, commercial proposal, logo) was renamed to `docs/` and the
+already-canonical `docs/00-04-*.md` were moved in on top, which nested a
+stale duplicate at `docs/docs/`. Removed `docs/docs/` (byte-identical to the
+top-level copies — confirmed via diff, safe delete). `docs/` now holds both
+the canonical module specs and the raw source material in one place. Fixed
+one stale path reference (`website/CONTEXT.md` pointed at
+`documentation/logo-cimes.png`; corrected to `assets/logo-cimes.png`, sourced
+from `docs/logo-cimes.png`). No other file referenced the old path.
+
+**Kapso built-in inbox vs. self-hosted Chatwoot (decision — keep Chatwoot):**
+Kapso has its own inbox (`docs/platform/inbox`) — a shared team view over
+WhatsApp conversations (assignment, Active/Ended status, filters), not a
+CRM. Per Kapso's own docs it has no labels/tags, no custom fields/
+attributes, no per-conversation AI-toggle webhook, no lead panel — the exact
+things `03-crm.md` and the `ai_enabled` contract (`00-master.md §5.2`)
+depend on. Verdict: keep the self-hosted Chatwoot plan as specced. Revisit
+only if the client explicitly wants to drop the labels/custom-attributes/
+lead-panel scope to avoid running a second service — that's a scope change
+needing a client conversation, not a silent swap.
+
+**Where to run `kapso` CLI commands:** `kapso login` session state lives in
+`~/.kapso/cli/` (home directory, machine-wide) and project selection
+(`kapso projects use <id>`) is remembered by the CLI itself, not written into
+a local project file. Doesn't matter which directory you run `kapso setup`/
+`kapso login` from — nothing gets scaffolded into `cimes/`. Recommended: run
+from `cimes/` (repo root) for consistency, since it configures project-wide
+things (numbers, templates, webhooks), not backend-only code. After running
+`kapso setup`, check `git status` in case a future CLI version starts
+writing a local config file.
+
+**Fixed:** `src/.env` existed but nothing loaded it (no `dotenv`, no
+`--env-file`). Added `--env-file=.env` to the `dev`/`start` scripts
+(`src/package.json`) — native Node 22 flag, no new dependency.

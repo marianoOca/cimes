@@ -8,19 +8,36 @@ Spec is canonical in `docs/` — this room never restates contracts.
 ## Layout
 
 - `src/config.ts` — env parsing (names/defaults: `docs/00-master.md §8`)
-- `src/db/` — SQLite schema + accessors (leads, orders, events, jobs, debt)
-- `src/waterservice/` — per-endpoint WaterService wrappers + zod schemas
-- `src/providers/` — `PriceProvider`, `GeocodingProvider`
-- `src/engine/` — conversation engine, stages, labels, handoff, per-lead queue
-- `src/ai/` — Anthropic SDK loop, tools, system prompt
-- `src/kapso/` — webhook verify/normalize + send API (render primitives)
-- `src/pipeline/` — order confirmation pipeline + dispatch scheduler
-- `src/engines/` — follow-up engine, debt-reminder engine
-- `src/jobs/` — SQLite jobs table + polling runner (all timers/retries)
-- `src/sheets/` — orders-sheet append/update
-- `src/api/` — Fastify routes (`/api/prices`, `/api/coverage`, `/api/orders`, export, webhooks)
+- `src/index.ts` — service entrypoint (server + job runner boot)
+- `src/db/` — SQLite schema (`db.ts`) + accessors: `leads.ts`, `orders.ts`,
+  `orders-update.ts` (sheet-row/neighbor-client patches), `events.ts`
+- `src/waterservice/` — `http.ts` (token cache, body-`error` check) +
+  `client.ts` (per-endpoint wrappers, zod schemas)
+- `src/providers/` — `types.ts` contracts, `prices.ts` (`PriceProvider`),
+  `geocoding.ts` (`GeocodingProvider`)
+- `src/engine/` — `conversation.ts` (entry point, hybrid input, stage
+  rendering), `stages.ts`, `coverage.ts`, `handoff.ts`, `leadQueue.ts`,
+  `notify.ts` (operator alerts)
+- `src/engines/` — `followups.ts`, `debt.ts` (the two timer-driven engines)
+- `src/ai/` — `agent.ts` (Anthropic SDK loop + caching), `prompt.ts`, `tools.ts`
+  (the 5 canonical tools)
+- `src/kapso/` — `webhook.ts` (verify/normalize inbound), `send.ts` (send API,
+  renders text/buttons/list/flow/template)
+- `src/pipeline/` — `orders.ts` (confirmation pipeline), `dispatch.ts`
+  (day-before ticket scheduler)
+- `src/jobs/` — `queue.ts`: SQLite jobs table + polling runner (all
+  timers/retries in the service)
+- `src/sheets/` — `orders.ts`: orders-sheet append/update
+- `src/crm/` — `mirror.ts`: Chatwoot mirror (outbound sync + inbound webhook glue)
+- `src/api/` — `server.ts` (Fastify routes: `/api/prices`, `/api/coverage`,
+  `/api/orders`, export, Kapso/Chatwoot/Meta webhooks), `instagram.ts` (Flow D
+  leadgen ingestion)
 - `src/copy.es-AR.ts` — ALL user-facing strings (voseo)
-- `test/` — vitest
+- `test/` — vitest (`conversation`, `followups`, `jobs`, `pipeline`, `time`,
+  `webhook`, `website`)
+- `.env` / `.env.example` — local env; loaded from this directory since every
+  backend command runs with `src/` as cwd (`cd src && npm run dev`, per root
+  `CLAUDE.md`)
 
 ## Process
 
