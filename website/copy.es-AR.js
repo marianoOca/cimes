@@ -3,12 +3,19 @@
 // confirmation phrasing kept consistent with the chatbot's copy module.
 window.CIMES_COPY = {
   brand: "CIMES",
+  a11y: { skip: "Ir al alta automática" },
   nav: { signup: "Alta automática", whatsapp: "WhatsApp" },
   hero: {
+    eyebrow: "Agua pura, protegida y a domicilio",
     title: "Agua y soda a domicilio, todas las semanas",
     subtitle:
       "Sumate a CIMES y recibí bidones, soda y dispensers en tu casa, en tu día de reparto semanal.",
     cta: "¡Quiero darme de alta!",
+    badges: {
+      delivery: "Reparto semanal",
+      returnable: "Envases retornables",
+      quick: "Alta en 2 minutos",
+    },
   },
   dualCta: {
     title: "Elegí cómo darte de alta",
@@ -76,11 +83,12 @@ window.CIMES_COPY = {
     ],
   },
   footer: {
-    email: "contacto@cimes.com.ar",
+    tagline: "Agua y soda a domicilio, semana a semana.",
+    email: "clientes@cimes-silva.com",
     instagram: "cimes.silva",
-    instagramUrl: "https://www.instagram.com/cimes.silva",
-    facebookUrl: "https://www.facebook.com/",
-    tiktokUrl: "https://www.tiktok.com/",
+    instagramUrl: "https://www.instagram.com/cimes.silva/",
+    facebookUrl: "https://www.facebook.com/people/Cimes-Silva-e-Hijos/61564228611826/",
+    tiktokUrl: "https://www.tiktok.com/@cimes.silva",
     privacy: "Política de privacidad",
     rights: "© CIMES. Todos los derechos reservados.",
   },

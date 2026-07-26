@@ -1,0 +1,116 @@
+/* Mobile-first, blue/white water theme mirroring the competitor's patterns.
+   Colors/imagery get tuned by the client after v1 (00-master §10c). */
+:root {
+  --blue: #0a6ebd;
+  --blue-dark: #084f88;
+  --blue-light: #e8f3fb;
+  --green: #25d366;
+  --ink: #16303f;
+  --muted: #5b7284;
+  --bg: #ffffff;
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+}
+
+section { padding: 3rem 1.25rem; max-width: 960px; margin: 0 auto; }
+h1 { font-size: 2rem; line-height: 1.2; }
+h2 { font-size: 1.5rem; margin-bottom: 1rem; text-align: center; }
+h3 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+p { margin-bottom: 0.75rem; }
+
+.site-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.75rem 1.25rem; background: var(--blue); color: #fff;
+  position: sticky; top: 0; z-index: 10;
+}
+.site-header .brand { color: #fff; font-weight: 800; font-size: 1.25rem; text-decoration: none; letter-spacing: 1px; }
+.site-header nav a { color: #fff; text-decoration: none; margin-left: 1rem; font-size: 0.95rem; }
+
+.hero {
+  background: linear-gradient(160deg, var(--blue-light), #fff);
+  text-align: center; padding-top: 4rem; padding-bottom: 4rem;
+}
+.hero p { color: var(--muted); max-width: 34rem; margin: 0.75rem auto 1.5rem; }
+
+.btn {
+  display: inline-block; padding: 0.8rem 1.5rem; border-radius: 999px;
+  text-decoration: none; font-weight: 700; border: none; cursor: pointer;
+  font-size: 1rem; transition: filter 0.15s;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-whatsapp { background: var(--green); color: #fff; }
+.btn-secondary { background: var(--blue-light); color: var(--blue-dark); }
+.btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+
+.cards { display: grid; gap: 1rem; }
+@media (min-width: 700px) { .cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); } }
+
+.card {
+  background: #fff; border: 1px solid #dbe7ef; border-radius: var(--radius);
+  padding: 1.5rem; text-align: center; box-shadow: 0 2px 8px rgba(10, 110, 189, 0.06);
+}
+.card p { color: var(--muted); font-size: 0.95rem; }
+.card .btn { margin-top: 0.75rem; }
+
+.dual-cta { background: #fff; }
+
+.wizard { background: var(--blue-light); border-radius: var(--radius); margin: 1rem auto; }
+.wizard-subtitle { text-align: center; color: var(--muted); margin-bottom: 1.25rem; }
+.wizard-card { max-width: 480px; margin: 0 auto; text-align: left; }
+.wizard-card h3 { text-align: center; margin-bottom: 1rem; }
+
+.option-list { display: grid; gap: 0.5rem; }
+.option-list button {
+  padding: 0.75rem 1rem; border: 1px solid #c8dcea; border-radius: var(--radius);
+  background: #fff; cursor: pointer; font-size: 1rem; text-align: left;
+}
+.option-list button:hover { border-color: var(--blue); background: var(--blue-light); }
+.option-list .price { float: right; font-weight: 700; color: var(--blue-dark); }
+
+.field { margin-bottom: 0.9rem; }
+.field label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.25rem; }
+.field input {
+  width: 100%; padding: 0.65rem 0.75rem; border: 1px solid #c8dcea;
+  border-radius: 8px; font-size: 1rem;
+}
+.field .error { color: #c0392b; font-size: 0.85rem; display: none; }
+.field.invalid input { border-color: #c0392b; }
+.field.invalid .error { display: block; }
+
+.wizard-actions { display: flex; gap: 0.5rem; justify-content: space-between; margin-top: 1rem; }
+.summary-list { list-style: none; margin-bottom: 1rem; }
+.summary-list li { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px dashed #dbe7ef; }
+.summary-list span:first-child { color: var(--muted); }
+
+.status-msg { text-align: center; padding: 1rem 0; }
+.status-msg.success { color: var(--blue-dark); font-weight: 600; }
+
+.note { text-align: center; color: var(--muted); font-size: 0.9rem; }
+.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.product-card .emoji { font-size: 2rem; }
+
+.coverage { text-align: center; }
+.coverage ul { list-style: none; display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; }
+.coverage li { background: var(--blue-light); color: var(--blue-dark); padding: 0.4rem 1rem; border-radius: 999px; font-weight: 600; }
+
+.testimonials .card { font-style: italic; }
+.testimonials .name { font-style: normal; font-weight: 700; margin-top: 0.5rem; color: var(--blue-dark); }
+
+.site-footer { background: var(--ink); color: #cfe0ec; text-align: center; padding: 2rem 1.25rem; }
+.site-footer a { color: #fff; margin: 0 0.5rem; }
+
+.wa-float {
+  position: fixed; right: 1rem; bottom: 1rem; width: 3.25rem; height: 3.25rem;
+  background: var(--green); border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-size: 1.5rem; text-decoration: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25); z-index: 20;
+}

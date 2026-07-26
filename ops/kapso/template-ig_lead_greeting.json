@@ -1,0 +1,15 @@
+{
+  "name": "ig_lead_greeting",
+  "language": "es_AR",
+  "category": "UTILITY",
+  "parameter_format": "POSITIONAL",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola {{1}}! Gracias por tu consulta en {{2}} 💧. Vi que te interesa {{3}}. Soy el asistente de CIMES: respondeme por acá y seguimos con tu pedido.",
+      "example": {
+        "body_text": [["Juan", "Luján", "bidón 20L"]]
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "web_order_confirmation",
+  "language": "es_AR",
+  "category": "UTILITY",
+  "parameter_format": "POSITIONAL",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Pedido confirmado! 🎉 Te lo llevamos el {{1}} {{2}}. Cualquier cosa escribinos por acá.",
+      "example": {
+        "body_text": [["sábado", "entre 10 y 13"]]
+      }
+    }
+  ]
+}

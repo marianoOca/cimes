@@ -10,6 +10,9 @@
   <meta property="og:type" content="website" />
   <meta property="og:image" content="assets/logo-cimes.png" />
   <link rel="icon" href="assets/logo-cimes.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@600;700;800&family=Roboto:wght@400;500;700&display=swap" />
   <link rel="stylesheet" href="styles.css" />
   <script type="application/ld+json">
   {
@@ -18,101 +21,160 @@
     "name": "CIMES",
     "description": "Agua y soda a domicilio con reparto semanal: bidones retornables, soda en sifón, saborizadas y dispensers.",
     "areaServed": ["Mercedes", "Luján", "San Andrés de Giles", "San Antonio de Areco", "Chivilcoy", "Campana", "Zárate"],
-    "email": "contacto@cimes.com.ar",
-    "sameAs": ["https://www.instagram.com/cimes.silva"]
+    "email": "clientes@cimes-silva.com",
+    "sameAs": [
+      "https://www.instagram.com/cimes.silva/",
+      "https://www.facebook.com/people/Cimes-Silva-e-Hijos/61564228611826/",
+      "https://www.tiktok.com/@cimes.silva"
+    ]
   }
   </script>
   <!-- GTM: the client's existing Google Tag Manager container goes here (04 §8).
        Paste the GTM snippet (head part) on deploy — container id from the client. -->
 </head>
-<body>
+<body id="top">
   <!-- GTM (noscript body part) goes here on deploy. -->
 
+  <a class="skip-link" href="#alta" data-copy="a11y.skip"></a>
+
   <header class="site-header">
-    <a class="brand" href="#">CIMES</a>
-    <nav>
-      <a href="#alta" data-copy="nav.signup"></a>
-      <a id="nav-wa" href="#" target="_blank" rel="noopener" data-copy="nav.whatsapp"></a>
-    </nav>
+    <div class="header-inner">
+      <a class="brand" href="#top" aria-label="CIMES — inicio">
+        <img src="assets/logo-cimes.png" alt="CIMES" width="132" height="44" />
+      </a>
+      <nav class="site-nav" aria-label="Principal">
+        <a id="nav-wa" class="nav-link nav-wa" href="#" target="_blank" rel="noopener" data-copy="nav.whatsapp"></a>
+        <a class="btn btn-primary btn-sm nav-cta" href="#alta" data-copy="nav.signup"></a>
+      </nav>
+    </div>
   </header>
 
-  <!-- 1. Hero -->
-  <section class="hero">
-    <h1 data-copy="hero.title"></h1>
-    <p data-copy="hero.subtitle"></p>
-    <a class="btn btn-primary" href="#alta" data-copy="hero.cta"></a>
-  </section>
-
-  <!-- 2. Dual CTA block -->
-  <section class="dual-cta" id="sumate">
-    <h2 data-copy="dualCta.title"></h2>
-    <div class="cards">
-      <div class="card">
-        <h3 data-copy="dualCta.auto.title"></h3>
-        <p data-copy="dualCta.auto.description"></p>
-        <a class="btn btn-primary" href="#alta" data-copy="dualCta.auto.button"></a>
+  <main>
+    <!-- 1. Hero -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="dot" aria-hidden="true"></span><span data-copy="hero.eyebrow"></span></p>
+          <h1 id="hero-title" data-copy="hero.title"></h1>
+          <p class="hero-sub" data-copy="hero.subtitle"></p>
+          <div class="hero-actions">
+            <a class="btn btn-primary btn-lg" href="#alta" data-copy="hero.cta"></a>
+            <a class="btn btn-ghost btn-lg wa-link" href="#" target="_blank" rel="noopener" data-copy="dualCta.whatsapp.button"></a>
+          </div>
+          <ul class="hero-badges">
+            <li class="badge badge-pin" data-copy="hero.badges.delivery"></li>
+            <li class="badge badge-drop" data-copy="hero.badges.returnable"></li>
+            <li class="badge badge-check" data-copy="hero.badges.quick"></li>
+          </ul>
+        </div>
+        <div class="hero-media">
+          <img class="hero-img" src="assets/hero-mobile.png" width="480" height="533"
+               alt="Botellón de agua CIMES sobre un dispenser" />
+        </div>
       </div>
-      <div class="card">
-        <h3 data-copy="dualCta.whatsapp.title"></h3>
-        <p data-copy="dualCta.whatsapp.description"></p>
-        <a class="btn btn-whatsapp wa-link" href="#" target="_blank" rel="noopener" data-copy="dualCta.whatsapp.button"></a>
+    </section>
+
+    <!-- 2. Signup options (dual CTA) -->
+    <section class="signup-options" id="sumate" aria-labelledby="sumate-title">
+      <div class="section-inner">
+        <h2 id="sumate-title" data-copy="dualCta.title"></h2>
+        <div class="options-grid">
+          <article class="opt-card opt-auto">
+            <div class="opt-ic" aria-hidden="true"><img src="assets/ic-assignment.svg" alt="" width="34" height="34" /></div>
+            <h3 data-copy="dualCta.auto.title"></h3>
+            <p data-copy="dualCta.auto.description"></p>
+            <a class="btn btn-primary" href="#alta" data-copy="dualCta.auto.button"></a>
+          </article>
+          <article class="opt-card opt-wa">
+            <div class="opt-ic opt-ic-wa" aria-hidden="true"><img src="assets/ic-whatsapp.svg" alt="" width="34" height="34" /></div>
+            <h3 data-copy="dualCta.whatsapp.title"></h3>
+            <p data-copy="dualCta.whatsapp.description"></p>
+            <a class="btn btn-whatsapp wa-link" href="#" target="_blank" rel="noopener" data-copy="dualCta.whatsapp.button"></a>
+          </article>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- 3. Self-service signup wizard (Flow B) -->
-  <section class="wizard" id="alta">
-    <h2 data-copy="wizard.title"></h2>
-    <p class="wizard-subtitle" data-copy="wizard.subtitle"></p>
-    <div id="wizard-root" class="card wizard-card" aria-live="polite"></div>
-  </section>
+    <!-- 3. Self-service signup wizard (Flow B) — primary conversion -->
+    <section class="wizard" id="alta" aria-labelledby="wizard-title">
+      <div class="section-inner wizard-inner">
+        <div class="wizard-head">
+          <h2 id="wizard-title" data-copy="wizard.title"></h2>
+          <p class="wizard-subtitle" data-copy="wizard.subtitle"></p>
+        </div>
+        <div id="wizard-root" class="wizard-card" aria-live="polite"></div>
+      </div>
+    </section>
 
-  <!-- 4. ¿Cómo funciona? -->
-  <section class="how">
-    <h2 data-copy="how.title"></h2>
-    <div class="cards" id="how-steps"></div>
-  </section>
+    <!-- 4. ¿Cómo funciona? -->
+    <section class="how" aria-labelledby="how-title">
+      <div class="section-inner">
+        <h2 id="how-title" data-copy="how.title"></h2>
+        <div class="steps" id="how-steps"></div>
+      </div>
+    </section>
 
-  <!-- 5. Product catalog grid (marketing — prices omitted by design, 04 §2.5) -->
-  <section class="products">
-    <h2 data-copy="products.title"></h2>
-    <p class="note" data-copy="products.note"></p>
-    <div class="grid" id="product-grid"></div>
-  </section>
+    <!-- 5. Product catalog grid (marketing — prices omitted by design, 04 §2.5) -->
+    <section class="products" aria-labelledby="products-title">
+      <div class="section-inner">
+        <h2 id="products-title" data-copy="products.title"></h2>
+        <p class="note" data-copy="products.note"></p>
+        <div class="grid" id="product-grid"></div>
+      </div>
+    </section>
 
-  <!-- 6. Trust -->
-  <section class="trust">
-    <h2 data-copy="trust.title"></h2>
-    <div class="cards" id="trust-items"></div>
-  </section>
+    <!-- 6. Trust -->
+    <section class="trust" aria-labelledby="trust-title">
+      <div class="section-inner">
+        <h2 id="trust-title" data-copy="trust.title"></h2>
+        <div class="cards trust-cards" id="trust-items"></div>
+      </div>
+    </section>
 
-  <!-- 7. Coverage -->
-  <section class="coverage">
-    <h2 data-copy="coverage.title"></h2>
-    <p data-copy="coverage.text"></p>
-    <ul id="coverage-cities"></ul>
-  </section>
+    <!-- 7. Coverage -->
+    <section class="coverage" aria-labelledby="coverage-title">
+      <div class="section-inner">
+        <h2 id="coverage-title" data-copy="coverage.title"></h2>
+        <p data-copy="coverage.text"></p>
+        <ul id="coverage-cities"></ul>
+      </div>
+    </section>
 
-  <!-- 8. Testimonials (client provides the 3 real ones — placeholder slots) -->
-  <section class="testimonials">
-    <h2 data-copy="testimonials.title"></h2>
-    <div class="cards" id="testimonial-items"></div>
-  </section>
+    <!-- 8. Testimonials (client provides the 3 real ones — placeholder slots) -->
+    <section class="testimonials" aria-labelledby="testimonials-title">
+      <div class="section-inner">
+        <h2 id="testimonials-title" data-copy="testimonials.title"></h2>
+        <div class="cards testimonial-cards" id="testimonial-items"></div>
+      </div>
+    </section>
+  </main>
 
   <!-- 9. Footer -->
   <footer class="site-footer">
-    <p><a id="footer-email" href="#"></a></p>
-    <p class="social">
-      <a id="footer-ig" href="#" target="_blank" rel="noopener">Instagram</a>
-      <a id="footer-fb" href="#" target="_blank" rel="noopener">Facebook</a>
-      <a id="footer-tt" href="#" target="_blank" rel="noopener">TikTok</a>
-    </p>
-    <p><a href="privacy.html" data-copy="footer.privacy"></a></p>
-    <p data-copy="footer.rights"></p>
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <img src="assets/logo-cimes.png" alt="CIMES" width="120" height="40" />
+        <p class="footer-tag" data-copy="footer.tagline"></p>
+      </div>
+      <div class="footer-contact">
+        <a id="footer-email" class="footer-email" href="#"></a>
+        <div class="social" aria-label="Redes sociales">
+          <a id="footer-ig" href="#" target="_blank" rel="noopener" aria-label="Instagram"><img src="assets/ic-ig.svg" alt="" width="22" height="22" /></a>
+          <a id="footer-fb" href="#" target="_blank" rel="noopener" aria-label="Facebook"><img src="assets/ic-fb.svg" alt="" width="22" height="22" /></a>
+          <a id="footer-tt" href="#" target="_blank" rel="noopener" aria-label="TikTok">TikTok</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-legal">
+      <a href="privacy.html" data-copy="footer.privacy"></a>
+      <span data-copy="footer.rights"></span>
+    </div>
   </footer>
 
   <!-- Floating WhatsApp widget -->
-  <a class="wa-float wa-link" href="#" target="_blank" rel="noopener" aria-label="WhatsApp">💬</a>
+  <a class="wa-float wa-link" href="#" target="_blank" rel="noopener" aria-label="Escribinos por WhatsApp">
+    <img src="assets/ic-whatsapp.svg" alt="" width="30" height="30" />
+  </a>
 
   <script src="config.js"></script>
   <script src="copy.es-AR.js"></script>

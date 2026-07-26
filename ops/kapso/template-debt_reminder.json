@@ -1,0 +1,15 @@
+{
+  "name": "debt_reminder",
+  "language": "es_AR",
+  "category": "UTILITY",
+  "parameter_format": "POSITIONAL",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola! Mañana pasa el repartidor de CIMES por tu domicilio. Te recordamos que tenés un saldo pendiente de {{1}}, que podés abonar directamente al repartidor. ¡Gracias!",
+      "example": {
+        "body_text": [["$1500"]]
+      }
+    }
+  ]
+}

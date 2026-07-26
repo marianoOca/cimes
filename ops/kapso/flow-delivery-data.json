@@ -1,0 +1,76 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "DELIVERY_DATA",
+      "terminal": true,
+      "success": true,
+      "title": "Datos de entrega",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "Completá tus datos para coordinar la entrega."
+          },
+          {
+            "type": "TextInput",
+            "name": "nombre",
+            "label": "Nombre",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "TextInput",
+            "name": "apellido",
+            "label": "Apellido",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "TextInput",
+            "name": "calle",
+            "label": "Calle",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "TextInput",
+            "name": "altura",
+            "label": "Altura (número)",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "TextInput",
+            "name": "entre_calles",
+            "label": "Entre calles",
+            "input-type": "text",
+            "required": false
+          },
+          {
+            "type": "TextArea",
+            "name": "notas",
+            "label": "Notas (opcional)",
+            "required": false
+          },
+          {
+            "type": "Footer",
+            "label": "Enviar",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "nombre": "${form.nombre}",
+                "apellido": "${form.apellido}",
+                "calle": "${form.calle}",
+                "altura": "${form.altura}",
+                "entre_calles": "${form.entre_calles}",
+                "notas": "${form.notas}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
