@@ -14,6 +14,8 @@ import { normalizeInbound, verifyKapsoSignature } from "../kapso/webhook.js";
 import { sendText } from "../kapso/send.js";
 import { confirmOrder, maybeSendWebConfirmation } from "../pipeline/orders.js";
 import { handleInstagramLead, verifyMetaSignature } from "./instagram.js";
+import { recordWaitlistLead } from "./waitlist.js";
+import { resolveCartLines } from "./orders-cart.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -75,6 +77,45 @@ export function buildServer(db: DB): FastifyInstance {
     };
   });
 
+  // Out-of-coverage waitlist (04-website §5): the "Otra ciudad" form leaves a
+  // contact so the operator reaches out when the zone is added. Records a lead
+  // labeled `otra_ciudad` + a sheet row; no order pipeline, no coverage check.
+  app.post("/api/waitlist", async (req) => {
+    const body = z
+      .object({
+        source: z.literal("web").default("web"),
+        name: z.string().min(1),
+        phone: z.string().min(5),
+        city: z.string().min(1),
+        comment: z.string().default(""),
+        // Paid-social attribution (optional; captured client-side from the ad click).
+        utm_source: z.string().optional(),
+        utm_medium: z.string().optional(),
+        utm_campaign: z.string().optional(),
+        utm_content: z.string().optional(),
+        utm_term: z.string().optional(),
+        fbclid: z.string().optional(),
+        gclid: z.string().optional(),
+      })
+      .parse(req.body);
+    recordWaitlistLead(db, {
+      name: body.name,
+      phone: body.phone,
+      city: body.city,
+      comment: body.comment,
+      attribution: {
+        utm_source: body.utm_source,
+        utm_medium: body.utm_medium,
+        utm_campaign: body.utm_campaign,
+        utm_content: body.utm_content,
+        utm_term: body.utm_term,
+        fbclid: body.fbclid,
+        gclid: body.gclid,
+      },
+    });
+    return { ok: true };
+  });
+
   app.post("/api/orders", async (req, reply) => {
     const body = z
       .object({
@@ -84,11 +125,38 @@ export function buildServer(db: DB): FastifyInstance {
         city: z.string().min(1),
         address: z.string().min(1),
         cross_streets: z.string().default(""),
-        product: z.string().min(1),
+        // Multi-item cart (website). `items` is preferred; a single `product`
+        // string is still accepted (legacy single-product callers).
+        product: z.string().min(1).optional(),
+        items: z
+          .array(z.object({ product: z.string().min(1), qty: z.number().int().min(1) }))
+          .min(1)
+          .optional(),
         delivery_day: z.string().min(1),
         delivery_window: z.string().default(""),
+        // Paid-social attribution (optional; captured client-side from the ad click).
+        utm_source: z.string().optional(),
+        utm_medium: z.string().optional(),
+        utm_campaign: z.string().optional(),
+        utm_content: z.string().optional(),
+        utm_term: z.string().optional(),
+        fbclid: z.string().optional(),
+        gclid: z.string().optional(),
+      })
+      .refine((b) => Boolean(b.items?.length) || Boolean(b.product), {
+        message: "one of items or product is required",
       })
       .parse(req.body);
+
+    const attribution = {
+      utm_source: body.utm_source,
+      utm_medium: body.utm_medium,
+      utm_campaign: body.utm_campaign,
+      utm_content: body.utm_content,
+      utm_term: body.utm_term,
+      fbclid: body.fbclid,
+      gclid: body.gclid,
+    };
 
     const { lead: created, created: isNew } = getOrCreateLead(db, {
       phone: body.phone,
@@ -101,6 +169,7 @@ export function buildServer(db: DB): FastifyInstance {
         source: body.source,
         city: body.city,
         event_type: "lead_created",
+        metadata: { attribution },
       });
     }
 
@@ -142,19 +211,20 @@ export function buildServer(db: DB): FastifyInstance {
       price_list: coverage.price_list ?? "",
     });
 
-    // Price from the resolved list — never client-supplied.
+    // Prices from the resolved list, never client-supplied. Multi-item cart is
+    // summarized to one line ("2x A, 1x B") + total; a single legacy `product`
+    // becomes a one-line, qty-1 cart.
     const catalog = await getPriceProvider().getPricesForList(coverage.price_list!);
-    const product = catalog.products.find(
-      (p) => p.name.toLowerCase() === body.product.toLowerCase() || p.id === body.product,
-    );
-    if (!product) return reply.code(422).send({ error: "unknown_product" });
+    const cartItems = body.items ?? [{ product: body.product!, qty: 1 }];
+    const cart = resolveCartLines(catalog, cartItems);
+    if (!cart.ok) return reply.code(422).send({ error: cart.error });
     const option =
       coverage.delivery_options.find((o) => o.weekday === body.delivery_day.toLowerCase()) ??
       null;
     if (!option) return reply.code(422).send({ error: "unknown_delivery_day" });
     lead = updateLead(db, lead.lead_id, {
-      price: product.price,
-      product: product.name,
+      price: cart.total,
+      product: cart.summary,
       route: option.route,
       delivery_day: option.weekday,
       delivery_window: option.time_window,

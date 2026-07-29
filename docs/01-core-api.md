@@ -167,6 +167,8 @@ route (reparto_id) | delivery_day | delivery_window |
 status (pending_dispatch | dispatched | failed) | ticket_id | created_at
 ```
 
+For a multi-item web order (§9) `product` holds the summary line (`"2x A, 1x B"`) and `price`/`amount_to_collect` the order total. The schema stays scalar (one row per order); line items are not stored separately.
+
 `POST /api/orders` returns this `order_id`. Operator edits (route/day — §4.5 override) mutate the row while `status = pending_dispatch`; the scheduler flips it to `dispatched` after a successful #3 call and stores `ticket_id`.
 
 ---
@@ -262,11 +264,14 @@ Emits a `coverage_checked` event.
 
 ### `POST /api/orders`
 Body: the full order. Runs the **order confirmation pipeline (§4.5)**: #6 client + #7 contact + #3 driver ticket (dispatched day-before by the scheduler) + orders-sheet row + label `cliente_cerrado`. **Idempotent per lead** (dedupe by phone via #2; safe to retry).
+
+Multi-item: the website sends `items: [{product, qty}]` (product = catalog name or id). The server resolves each against the city's price list (**prices never client-supplied**), sums the **total**, and stores the order as a single summary line (`product = "2x A, 1x B"`) with `price`/`amount_to_collect` = the total. This keeps the order one row / one ticket / one sheet row (the driver ticket lists the items as text). A single `product: string` is still accepted (legacy single-item / chatbot path). An item not in the price list → `422 { error: "unknown_product" }`.
 ```
 Request:  {
   source: "whatsapp" | "web" | "instagram",
   name, phone, city, address, cross_streets,
-  product, delivery_day, delivery_window
+  items: [{ product, qty }],   // preferred; or a single `product` string (legacy)
+  delivery_day, delivery_window
 }
 200 →     {
   order_id: string,
@@ -276,6 +281,19 @@ Request:  {
   label: "cliente_cerrado"
 }
 ```
+
+### `POST /api/waitlist`
+Uncovered-area lead capture for the website's "Otra ciudad" form (04-website §5). Create/update the lead by phone (#2), store the free-text zone in `city` and the optional comment in `notes`, set label `otra_ciudad`, and queue a lead-only orders-sheet row (same sheet job as Instagram leads). **No coverage check, no order pipeline.** Idempotent per phone (the sheet row dedupes on `sheet_waitlist:<lead_id>`).
+```
+Request:  {
+  source: "web",
+  name, phone, city,                    // city = free-text city/zone the visitor typed
+  comment?,                             // stored in the lead's notes
+  utm_source?, utm_medium?, utm_campaign?, utm_content?, utm_term?, fbclid?, gclid?
+}
+200 →     { ok: true }
+```
+Emits `lead_created` (only when the lead is new). No new label/event type — `otra_ciudad` and `lead_created` are the canonical existing values.
 
 ### `GET /api/export/events?from=&to=`
 Operator-triggered CSV export of the `events` table (§10.1) over a date range, **in order**. `from`/`to` are dates. Returns `text/csv` with all rows in the range in chronological order.

@@ -62,13 +62,13 @@ This is the core deliverable of the module. The **entire** signup completes on t
 
 1. **City select.** Visitor picks one of the 7 covered cities. (If the site chooses to offer an "otra ciudad" option, handle it per §5 — no-coverage.)
 
-2. **Priced catalog.** On city selection, call **`GET /api/prices?city=<city>`** and render the product catalog **with that city's prices**. The response is the catalog for exactly one city's price list — **render it as returned; never mix or cache another city's prices**. Visitor selects a product.
+2. **Priced catalog (multi-item cart).** On city selection, call **`GET /api/prices?city=<city>`** and render the product catalog **with that city's prices** as a card grid (product image + price + a quantity stepper). The response is the catalog for exactly one city's price list — **render it as returned; never mix or cache another city's prices**. The visitor can add **quantities of several products** (a running total is shown) before continuing; prices are formatted with a thousands separator. Product images are mapped from the product name to the local `assets/products/*.webp` photos (CIMES logo fallback when nothing matches).
 
 3. **Delivery-data form.** Collect: **nombre**, **apellido**, **teléfono (WhatsApp)**, **calle**, **altura**, **entre calles**. Apply **client-side validation** (required fields, phone format) before proceeding. (Server-side validation is enforced independently by the endpoints — see "Validation" below.)
 
 4. **Live coverage check + delivery-day picker.** Call **`POST /api/coverage`** with the composed address + city. On `covered: true`, render the returned **delivery-day options** — each option is a route + weekday + **time window** (e.g. "Reparto 19 — sábado entre 10 y 13"). Visitor picks one. On `covered: false`, go to the no-coverage path (§5). **The site does not decide coverage** — it displays whatever the endpoint returns.
 
-5. **Summary + confirm.** Show an order summary (product, price, address, chosen delivery day + window). Visitor confirms. Call **`POST /api/orders`** with the full order and `source: "web"`.
+5. **Summary + confirm.** Show an order summary (each cart line `qty × product` + subtotal, the **total**, address, chosen delivery day + window). Visitor confirms. Call **`POST /api/orders`** with the full order (`items: [{product, qty}]`) and `source: "web"`. The server resolves prices + total (§9); the site never sends prices.
 
 6. **Success state.** On a successful `POST /api/orders`, show a success screen with the scheduled delivery, e.g. **"Listo, te lo llevamos el sábado entre 10 y 13"** (copy from the es-AR module, interpolating the confirmed day + window from the order/coverage response).
 
@@ -105,9 +105,9 @@ When the address cannot be served, the flow does **not** dead-end — it ends po
 
 - **Polite on-page message.** Show a friendly "no llegamos a tu zona todavía" style message (from the es-AR copy module). No error state, no operator handoff prompt on the site.
 - **Lead is still recorded.** The lead is saved to the orders sheet with the appropriate coverage-failure label so it is not lost:
-  - **City outside the 7 covered cities** → label **`otra_ciudad`** (canonical terminal label, `00-master.md` §5.3).
-  - **Address inside a covered city but the live coverage check returns `covered: false`** → the "sin cobertura" case. In the settled label taxonomy (`00-master.md` §5.3) this maps to **`mal_lead`** ("unreachable address"). There is no separate `sin_cobertura` terminal label — use the canonical taxonomy; do not invent a new label.
-- **How the lead gets recorded:** the recording of a no-coverage lead is a backend concern. The website's job is to send the coverage/lead data to the backend and show the polite message. Confirm with `01-core-api.md` which endpoint records a no-coverage lead-to-sheet (the coverage endpoint or a dedicated lead-capture path); do not implement sheet writes from the browser.
+  - **City outside the 7 covered cities** → label **`otra_ciudad`** (canonical terminal label, `00-master.md` §5.3). In the city picker, **"Otra ciudad"** is a link to the focused waitlist form at **`/alta/?waitlist=1`** (name, WhatsApp, free-text city/zone, optional comment). Submitting POSTs to **`POST /api/waitlist`** (`01-core-api.md` §9), which records the `otra_ciudad` lead + sheet row so the operator can reach out when the zone is added.
+  - **Address inside a covered city but the live coverage check returns `covered: false`** → the "sin cobertura" case. In the settled label taxonomy (`00-master.md` §5.3) this maps to **`mal_lead`** ("unreachable address"). There is no separate `sin_cobertura` terminal label — use the canonical taxonomy; do not invent a new label. (This branch still shows the polite on-page message; wiring its lead-to-sheet capture is deferred.)
+- **How the lead gets recorded:** the recording of a no-coverage lead is a backend concern; the website only sends the lead data and shows the polite message (no sheet writes from the browser). The out-of-city case uses the dedicated **`POST /api/waitlist`** path (above).
 
 ---
 

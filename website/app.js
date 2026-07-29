@@ -1,5 +1,5 @@
 // Landing rendering + the Flow B signup wizard (04-website §3). Pure consumer
-// of the backend REST endpoints — no business logic here. Wizard state stays
+// of the backend REST endpoints. No business logic here. Wizard state stays
 // in memory; nothing persisted in the browser (04 §3 state handling).
 (function () {
   "use strict";
@@ -22,39 +22,225 @@
     CFG.WHATSAPP_NUMBER_SALES +
     "?text=" +
     encodeURIComponent(COPY.dualCta.whatsapp.prefill);
-  document.querySelectorAll(".wa-link, #nav-wa").forEach((a) => (a.href = waHref));
+  document.querySelectorAll(".wa-link").forEach((a) => (a.href = waHref));
 
-  document.getElementById("how-steps").innerHTML = COPY.how.steps
-    .map((s) => `<div class="card"><h3>${s.title}</h3><p>${s.text}</p></div>`)
-    .join("");
+  // ---------- measurement (04 §8): dataLayer funnel events + Meta Pixel ----------
+  // Self-initializing and guarded: a no-op when GTM/Pixel are absent (tests, or
+  // before the ids are configured at deploy).
+  function track(event, params) {
+    const payload = Object.assign({ event }, params || {});
+    (window.dataLayer = window.dataLayer || []).push(payload);
+    if (typeof window.fbq === "function") {
+      const map = { wizard_start: "InitiateCheckout", order_confirmed: "Lead", whatsapp_click: "Contact" };
+      if (map[event]) window.fbq("track", map[event], params || {});
+    }
+  }
 
-  document.getElementById("product-grid").innerHTML = COPY.products.items
-    .map(
-      (p) =>
-        `<div class="card product-card"><div class="emoji">${p.emoji}</div><h3>${p.name}</h3><p>${p.description}</p>` +
-        `<a class="btn btn-whatsapp" target="_blank" rel="noopener" href="${waHref}">${COPY.products.ctaLabel}</a></div>`,
-    )
-    .join("");
+  // Persist paid-social attribution (UTMs + click ids) so it reaches the order.
+  const attribution = (function () {
+    try {
+      const keys = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "fbclid", "gclid"];
+      const params = new URLSearchParams(window.location.search);
+      let stored = {};
+      try { stored = JSON.parse(sessionStorage.getItem("cimes_attribution") || "{}"); } catch (e) {}
+      let found = false;
+      keys.forEach((k) => { const v = params.get(k); if (v) { stored[k] = v; found = true; } });
+      if (found) { try { sessionStorage.setItem("cimes_attribution", JSON.stringify(stored)); } catch (e) {} }
+      return stored;
+    } catch (e) { return {}; }
+  })();
 
-  document.getElementById("trust-items").innerHTML = COPY.trust.items
-    .map((t) => `<div class="card"><h3>${t.title}</h3><p>${t.text}</p></div>`)
-    .join("");
+  // Delegated tracking for the primary CTA + every WhatsApp link (static + dynamic).
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest ? e.target.closest("a") : null;
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    if (href === "#alta") track("cta_click", { location: "signup" });
+    else if (/^https:\/\/wa\.me\//.test(href)) track("whatsapp_click", { location: a.dataset.waLoc || "unknown" });
+  });
 
-  document.getElementById("coverage-cities").innerHTML = COPY.coverage.cities
-    .map((c) => `<li>${c}</li>`)
-    .join("");
+  // Section renderers are guarded so app.js runs on any page (the homepage has
+  // these sections; the focused /alta page omits them).
+  const howEl = document.getElementById("how-steps");
+  if (howEl)
+    howEl.innerHTML = COPY.how.steps
+      .map(
+        (s, i) =>
+          `<li class="step"><span class="step-num">${i + 1}</span>` +
+          `<div class="step-body"><h3>${s.title}</h3><p>${s.text}</p></div></li>`,
+      )
+      .join("");
 
-  document.getElementById("testimonial-items").innerHTML = COPY.testimonials.items
-    .map((t) => `<div class="card"><p>${t.text}</p><p class="name">${t.name}</p></div>`)
-    .join("");
+  const gridEl = document.getElementById("product-grid");
+  if (gridEl)
+    gridEl.innerHTML = COPY.products.items
+      .map(
+        (p) =>
+          `<div class="card product-card"><div class="product-img"><img src="assets/products/${p.image}" alt="${esc(p.name)}" width="140" height="140" loading="lazy" /></div>` +
+          `<h3>${p.name}</h3><p>${p.description}</p></div>`,
+      )
+      .join("");
+
+  // Products carousel: seamless INFINITE loop (triple-cloned track + edge
+  // teleport) with swipe + arrows + dots + gentle autoplay (paused on any
+  // interaction). No-op without real layout (e.g. jsdom tests).
+  (function initProductCarousel() {
+    const track = document.getElementById("product-grid");
+    const prev = document.getElementById("prod-prev");
+    const next = document.getElementById("prod-next");
+    const dotsWrap = document.getElementById("prod-dots");
+    if (!track || !prev || !next) return;
+    const originals = Array.from(track.children);
+    const N = originals.length;
+    if (N < 2 || !track.clientWidth) return;
+
+    // Build three identical copies: [clones][originals][clones]. Scrolling stays
+    // in the middle copy; nearing either physical edge teleports one copy over,
+    // so the user never reaches a beginning or an end.
+    originals.forEach((c) => {
+      const lead = c.cloneNode(true);
+      const tail = c.cloneNode(true);
+      lead.setAttribute("aria-hidden", "true");
+      tail.setAttribute("aria-hidden", "true");
+      track.insertBefore(lead, originals[0]);
+      track.appendChild(tail);
+    });
+
+    function stepWidth() {
+      const cs = getComputedStyle(track);
+      const gap = parseFloat(cs.columnGap || cs.gap || "0") || 0;
+      return originals[0].getBoundingClientRect().width + gap;
+    }
+    function copyWidth() {
+      return track.scrollWidth / 3;
+    }
+    function jumpTo(x) {
+      track.style.scrollBehavior = "auto";
+      track.scrollLeft = x;
+      track.style.scrollBehavior = "smooth";
+    }
+    // Start in the middle (real) copy.
+    jumpTo(copyWidth());
+
+    let timer = null;
+    function go(dir) {
+      track.scrollBy({ left: dir * stepWidth(), behavior: "smooth" });
+    }
+    function pause() {
+      if (timer) { clearInterval(timer); timer = null; }
+    }
+    function play() {
+      if (timer) return;
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduce) return;
+      timer = setInterval(() => go(1), 4500);
+    }
+
+    prev.addEventListener("click", () => { go(-1); pause(); });
+    next.addEventListener("click", () => { go(1); pause(); });
+
+    let dots = [];
+    if (dotsWrap) {
+      dotsWrap.innerHTML = originals
+        .map((_, i) => `<button type="button" aria-label="Ir al producto ${i + 1}"></button>`)
+        .join("");
+      dots = Array.from(dotsWrap.children);
+      dots.forEach((d, i) =>
+        d.addEventListener("click", () => {
+          track.scrollTo({ left: copyWidth() + i * stepWidth(), behavior: "smooth" });
+          pause();
+        }),
+      );
+    }
+
+    let raf = 0;
+    function onScroll() {
+      const w = copyWidth();
+      const s = stepWidth();
+      const x = track.scrollLeft;
+      if (x <= s * 0.5) jumpTo(x + w);
+      else if (x >= track.scrollWidth - track.clientWidth - s * 0.5) jumpTo(x - w);
+      const i = ((Math.round(track.scrollLeft / Math.max(1, s)) % N) + N) % N;
+      dots.forEach((d, di) => d.classList.toggle("active", di === i));
+    }
+    track.addEventListener(
+      "scroll",
+      () => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => { raf = 0; onScroll(); });
+      },
+      { passive: true },
+    );
+    onScroll();
+
+    ["pointerenter", "focusin", "touchstart"].forEach((e) =>
+      track.addEventListener(e, pause, { passive: true }),
+    );
+    track.addEventListener("pointerleave", play);
+    play();
+  })();
+
+  const trustEl = document.getElementById("trust-items");
+  if (trustEl)
+    trustEl.innerHTML = COPY.trust.items
+      .map((t) => `<div class="card" data-icon="${t.icon}"><h3><span class="card-ic"></span>${t.title}</h3><p>${t.text}</p></div>`)
+      .join("");
 
   const footer = COPY.footer;
   const email = document.getElementById("footer-email");
-  email.textContent = footer.email;
-  email.href = "mailto:" + footer.email;
-  document.getElementById("footer-ig").href = footer.instagramUrl;
-  document.getElementById("footer-fb").href = footer.facebookUrl;
-  document.getElementById("footer-tt").href = footer.tiktokUrl;
+  if (email) {
+    email.textContent = footer.email;
+    email.href = "mailto:" + footer.email;
+  }
+  const ig = document.getElementById("footer-ig");
+  if (ig) ig.href = footer.instagramUrl;
+  const fb = document.getElementById("footer-fb");
+  if (fb) fb.href = footer.facebookUrl;
+  const tt = document.getElementById("footer-tt");
+  if (tt) tt.href = footer.tiktokUrl;
+
+  // Floating WhatsApp button + header "Darme de alta" CTA: hidden over the
+  // hero, then float with the viewport. Scrolling back up, the WA button
+  // docks at the "Alta automática" title instead of drifting back over the
+  // hero (no-op pieces skipped when a page lacks them, e.g. /alta or privacy).
+  (function initScrollFloats() {
+    const waFloat = document.querySelector(".wa-float");
+    const navCta = document.querySelector(".nav-cta");
+    const dockTitle = document.getElementById("wizard-title") || document.getElementById("alta-title");
+    if ((!waFloat && !navCta) || !dockTitle) return;
+    const MARGIN = 18;
+    function update() {
+      const dockY = dockTitle.getBoundingClientRect().top + window.scrollY;
+      const floatY = window.scrollY + window.innerHeight - MARGIN - (waFloat ? waFloat.offsetHeight : 0);
+      const past = floatY > dockY;
+      if (waFloat) {
+        if (past) {
+          waFloat.style.position = "";
+          waFloat.style.top = "";
+        } else {
+          waFloat.style.position = "absolute";
+          waFloat.style.top = dockY + "px";
+        }
+      }
+      if (navCta) navCta.classList.toggle("is-visible", past);
+    }
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+  })();
+
+  // Canvas background is white by default (matches top-of-page bounce);
+  // switch to the footer's slate only once the page is actually scrolled
+  // to the bottom, so a fast scroll-up bounce at the top stays white.
+  (function initBottomBg() {
+    function update() {
+      const atBottom = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 1;
+      document.body.classList.toggle("is-at-bottom", atBottom);
+    }
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+  })();
 
   // ---------- wizard (Flow B) ----------
 
@@ -62,8 +248,8 @@
   const W = COPY.wizard;
   const state = {
     city: null,
-    catalog: null, // { price_list, products } — exactly one city's list
-    product: null,
+    catalog: null, // { price_list, products }: exactly one city's list
+    cart: null, // [{ id, name, price, qty }]: multi-item selection
     data: null, // { firstName, lastName, phone, street, number, crossStreets }
     coverage: null,
     option: null,
@@ -76,8 +262,242 @@
     })[c]);
   }
 
+  // Phone mask: only the leading "+" is truly fixed, so any country works.
+  // "digits" is everything typed after the "+". The Argentine-mobile mask
+  // (grouping, ghost prediction) only activates once digits literally start
+  // with "549" (the default prefill for AR use) — anything else is a foreign
+  // number and is shown/saved as plain "+" + digits, no grouping, no ghost.
+  function phoneIsAR(digits) {
+    return digits.startsWith("549");
+  }
+  // First digit after "549" picks the AR shape:
+  //  "0" -> 011-trunk-style Buenos Aires: 3-digit area, 8-digit local
+  //  "1" -> 11/15 Buenos Aires: 2-digit area, 8-digit local
+  //  else -> provincial (Mercedes/Luján/etc.): 4-digit area, 6-digit local
+  // All three Buenos Aires spellings (11/15/011) save to the same E.164 area "11".
+  function phoneModeOf(arDigits) {
+    if (arDigits[0] === "0") return { areaLen: 3, localLen: 8 };
+    if (arDigits[0] === "1") return { areaLen: 2, localLen: 8 };
+    return { areaLen: 4, localLen: 6 };
+  }
+  // Total digit count (after "+") for the current shape — AR has a known
+  // target; a foreign number doesn't, so cap at E.164's 15-digit max.
+  function phoneTotal(digits) {
+    if (!phoneIsAR(digits)) return 15;
+    const m = phoneModeOf(digits.slice(3));
+    return 3 + m.areaLen + m.localLen;
+  }
+  // What the input shows: only digits typed so far, grouped with a "-" once
+  // the AR local part passes its fixed split point.
+  function phoneReal(digits) {
+    if (!phoneIsAR(digits)) return "+" + digits.slice(0, 15);
+    const arDigits = digits.slice(3);
+    const { areaLen, localLen } = phoneModeOf(arDigits);
+    const d = arDigits.slice(0, areaLen + localLen);
+    const area = d.slice(0, areaLen);
+    const local = d.slice(areaLen);
+    let out = "+54 9" + (area ? " " + area : "");
+    if (local) {
+      const split = localLen - 4;
+      out += " " + (local.length > split ? local.slice(0, split) + "-" + local.slice(split) : local);
+    }
+    return out;
+  }
+  // Same shape as phoneReal but padded with "_" through the full target length —
+  // the grey prediction rendered behind the real, typed digits. No known target
+  // for a foreign number, so there's nothing to predict there.
+  function phoneFull(digits) {
+    if (!phoneIsAR(digits)) return phoneReal(digits);
+    const arDigits = digits.slice(3);
+    const { areaLen, localLen } = phoneModeOf(arDigits);
+    const area = arDigits.slice(0, areaLen).padEnd(areaLen, "_");
+    const local = arDigits.slice(areaLen, areaLen + localLen).padEnd(localLen, "_");
+    const split = localLen - 4;
+    return "+54 9 " + area + " " + local.slice(0, split) + "-" + local.slice(split);
+  }
+  // Canonical E.164 for storage/dedupe (the phone is the key shared with
+  // WhatsApp-sourced leads). Foreign numbers pass through as "+" + digits.
+  function phoneToE164(digits) {
+    if (!phoneIsAR(digits)) return "+" + digits;
+    const arDigits = digits.slice(3);
+    const { areaLen, localLen } = phoneModeOf(arDigits);
+    const area = areaLen === 4 ? arDigits.slice(0, 4) : "11";
+    const local = arDigits.slice(areaLen, areaLen + localLen);
+    return "+549" + area + local;
+  }
+  // A field is complete when its known AR target is fully typed; a foreign
+  // number has no known target, so just require a plausible minimum length.
+  function phoneIsComplete(digits) {
+    return phoneIsAR(digits) ? digits.length === phoneTotal(digits) : digits.length >= 8;
+  }
+  // Recovers the internal digit representation from a saved E.164 string (used
+  // when a user returns to edit the data step after going back from Day/Summary).
+  function phoneDigitsFromE164(e164) {
+    return String(e164 || "").replace(/\D/g, "");
+  }
+
+  // Renders + binds a masked phone field: only "+" is fixed, digit-only entry
+  // appended/removed from the end, AR grouping + grey "_" prediction for
+  // the untyped remainder. bind() must run after the markup is in the DOM.
+  function phoneField(id, label, initialDigits) {
+    let digits = initialDigits || "";
+    const html =
+      `<div class="field phone-mask" data-field="${id}"><label for="${id}">${label}</label>` +
+      `<div class="phone-mask-box"><div class="phone-mask-ghost" aria-hidden="true"></div>` +
+      `<input id="${id}" type="tel" inputmode="tel" autocomplete="tel" /></div>` +
+      `<span class="error"></span></div>`;
+    function bind() {
+      const wrap = root.querySelector(`[data-field="${id}"]`);
+      const input = wrap.querySelector("input");
+      const ghost = wrap.querySelector(".phone-mask-ghost");
+      const errorEl = wrap.querySelector(".error");
+      function render() {
+        const real = phoneReal(digits);
+        const full = phoneFull(digits);
+        input.value = real;
+        ghost.innerHTML =
+          `<span class="pm-typed">${esc(real)}</span><span class="pm-pending">${esc(full.slice(real.length))}</span>`;
+        input.setSelectionRange(real.length, real.length);
+        wrap.classList.remove("invalid"); // clear a prior failed-submit flag as the user edits
+      }
+      // Caret always sits at the end: every example the field follows appends
+      // or removes from the end, never mid-string — so navigation keys are
+      // no-ops rather than letting the caret drift out of sync with `digits`.
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home") e.preventDefault();
+      });
+      input.addEventListener("focus", () => input.setSelectionRange(input.value.length, input.value.length));
+      input.addEventListener("beforeinput", (e) => {
+        e.preventDefault();
+        if (/^delete/.test(e.inputType)) {
+          digits = digits.slice(0, -1);
+          render();
+          return;
+        }
+        const raw = e.data || (e.dataTransfer && e.dataTransfer.getData("text")) || "";
+        for (const ch of raw.replace(/\D/g, "")) {
+          if (digits.length >= phoneTotal(digits + ch)) break; // full: reject extra digits
+          digits += ch;
+        }
+        render();
+      });
+      render();
+      return {
+        isComplete: () => phoneIsComplete(digits),
+        markInvalid: (msg) => { errorEl.textContent = msg; wrap.classList.add("invalid"); },
+        toE164: () => phoneToE164(digits),
+      };
+    }
+    return { html, bind };
+  }
+
   function backButton(toStep) {
     return `<div class="wizard-actions"><button class="btn btn-secondary" data-back="${toStep}">${W.back}</button></div>`;
+  }
+
+  // ---------- /alta split-flow helpers ----------
+  function citySlug(c) {
+    return c.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim().replace(/\s+/g, "-");
+  }
+  function slugToCity(slug) {
+    const s = String(slug || "").toLowerCase();
+    return COPY.coverage.cities.find((c) => citySlug(c) === s) || null;
+  }
+  // Carry captured attribution onto the /alta link so a new-tab open keeps it.
+  function utmQS() {
+    const parts = Object.keys(attribution).map(
+      (k) => encodeURIComponent(k) + "=" + encodeURIComponent(attribution[k]),
+    );
+    return parts.length ? "&" + parts.join("&") : "";
+  }
+  function addressString(d) {
+    return d.direccion + (d.piso ? ", " + d.piso : "");
+  }
+  // Format an integer price with comma thousands separators ($2600 -> $2,600).
+  function money(n) {
+    return "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
+  }
+  // Map a catalog product name to a local photo; CIMES logo when nothing matches.
+  // Root-relative so it resolves on /alta/ (a subdirectory), not only the home page.
+  function productImage(name) {
+    const s = String(name || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const img = (f) => "/assets/products/" + f;
+    if (/soda|sifon/.test(s)) return img("soda-sifon.webp");
+    if (/saboriz/.test(s)) return img("saborizada.webp");
+    if (/gaseosa/.test(s)) return img("gaseosas.webp");
+    if (/jugo|polvo/.test(s)) return img("jugo.webp");
+    if (/12/.test(s) && /sodio|menos|\bms\b/.test(s)) return img("botellon-12l-ms.webp");
+    if (/20/.test(s)) return img("botellon-20l.webp");
+    if (/12/.test(s)) return img("botellon-12l.webp");
+    if (/botella|agua/.test(s)) return img("agua-botellas.webp");
+    return "/assets/logo-cimes.png";
+  }
+  // Mid-flow persistence: resume the furthest step after a reload of /alta.
+  function saveState() {
+    try {
+      sessionStorage.setItem(
+        "cimes_wizard",
+        JSON.stringify({ city: state.city, cart: state.cart, data: state.data, option: state.option }),
+      );
+    } catch (e) {}
+  }
+  function clearState() {
+    try { sessionStorage.removeItem("cimes_wizard"); } catch (e) {}
+  }
+  function loadState() {
+    try { return JSON.parse(sessionStorage.getItem("cimes_wizard") || "null"); } catch (e) { return null; }
+  }
+  // Google Places autocomplete on the address field. No-op when Maps is absent
+  // (jsdom tests, or a webview where the script didn't load): the field stays a
+  // plain text input the user can type into.
+  function attachPlaces() {
+    const input = document.getElementById("direccion");
+    if (!input || !(window.google && window.google.maps && window.google.maps.places)) return;
+    const ac = new window.google.maps.places.Autocomplete(input, {
+      componentRestrictions: { country: "ar" },
+      fields: ["address_components", "formatted_address", "geometry"],
+      types: ["address"],
+    });
+    ac.addListener("place_changed", () => {
+      const place = ac.getPlace();
+      const comp = {};
+      (place.address_components || []).forEach((c) =>
+        c.types.forEach((t) => { comp[t] = c.long_name; }),
+      );
+      const line = [comp.route, comp.street_number].filter(Boolean).join(" ");
+      if (line) input.value = line;
+      if (place.geometry && place.geometry.location) {
+        input.dataset.lat = place.geometry.location.lat();
+        input.dataset.lng = place.geometry.location.lng();
+      }
+    });
+  }
+
+  // Numbered stepper (rosmino-style). Falls back to a plain label if steps are
+  // not defined.
+  function progress(n) {
+    const labels = W.steps || [];
+    if (!labels.length) return `<p class="wizard-progress">${W.stepOf(n)}</p>`;
+    return (
+      `<ol class="wizard-stepper" aria-label="Progreso">` +
+      labels
+        .map((label, i) => {
+          const step = i + 1;
+          const cls = step === n ? "active" : step < n ? "done" : "";
+          return `<li class="${cls}"><span class="dot">${step}</span><span class="label">${esc(label)}</span></li>`;
+        })
+        .join("") +
+      `</ol>`
+    );
+  }
+
+  // Dead-end / error actions: Back plus a live WhatsApp fallback so a stuck
+  // visitor still has a path forward (the backend already records the lead).
+  function deadEndActions(toStep) {
+    return `<div class="wizard-actions">` +
+      `<button class="btn btn-secondary" data-back="${toStep}">${W.back}</button>` +
+      `<a class="btn btn-whatsapp" data-wa-loc="wizard_fallback" target="_blank" rel="noopener" href="${waHref}">${W.waFallback}</a>` +
+      `</div>`;
   }
 
   function bindBack() {
@@ -89,127 +509,278 @@
   const steps = {
     // 1. City select.
     city() {
+      track("wizard_step", { step: "city", n: 1 });
+      // City options are real links to the focused /alta page (city in the URL).
       root.innerHTML =
+        progress(1) +
         `<h3>${W.cityStep.title}</h3><div class="option-list">` +
         COPY.coverage.cities
-          .map((c) => `<button data-city="${esc(c)}">${esc(c)}</button>`)
+          .map((c) => `<a class="city-option" href="/alta/?city=${citySlug(c)}${utmQS()}">${esc(c)}</a>`)
           .join("") +
-        `<button data-city="__other">${W.cityStep.other}</button></div>`;
-      root.querySelectorAll("[data-city]").forEach((b) =>
-        b.addEventListener("click", () => {
-          if (b.dataset.city === "__other") {
-            root.innerHTML =
-              `<p class="status-msg">${W.noCoverage.city}</p>` + backButton("city");
-            bindBack();
-            return;
-          }
-          state.city = b.dataset.city;
-          steps.product();
-        }),
-      );
+        // "Otra ciudad" navigates to the waitlist form (uncovered-zone lead capture).
+        `<a class="city-option city-option-other" href="/alta/?waitlist=1${utmQS()}">${W.cityStep.other}</a></div>`;
+    },
+
+    // Waitlist form for uncovered zones (reached via /alta?waitlist=1 or the
+    // homepage "Otra ciudad" link). Captures contact and POSTs to /api/waitlist.
+    waitlist() {
+      track("wizard_step", { step: "waitlist" });
+      const w = W.waitlist;
+      const e = W.dataStep.errors;
+      const prev = state.waitlist || {};
+      const field = (id, label, value, attrs) =>
+        `<div class="field" data-field="${id}"><label for="${id}">${label}</label>` +
+        `<input id="${id}" value="${esc(value || "")}" ${attrs || ""} />` +
+        `<span class="error">${e.required}</span></div>`;
+      // No known city here, so the phone field starts at the bare "+54 9" default.
+      const phone = phoneField("wl-phone", w.phone, prev.phone ? phoneDigitsFromE164(prev.phone) : "549");
+      root.innerHTML =
+        `<h3>${w.title}</h3>` +
+        `<p class="wizard-intro">${esc(w.intro)}</p>` +
+        field("wl-name", w.name, prev.name, 'autocomplete="name" autocapitalize="words"') +
+        phone.html +
+        field("wl-zone", w.zone, prev.zone, `autocapitalize="words" placeholder="${esc(w.zonePlaceholder)}"`) +
+        field("wl-comment", w.comment, prev.comment, "") +
+        `<div class="wizard-actions"><button class="btn btn-secondary" data-back="city">${W.back}</button>` +
+        `<button class="btn btn-primary" id="wl-submit">${w.submit}</button></div>`;
+      bindBack();
+      const phoneApi = phone.bind();
+      const submitBtn = document.getElementById("wl-submit");
+      submitBtn.addEventListener("click", async () => {
+        if (state.submitting) return;
+        const required = { "wl-name": true, "wl-zone": true, "wl-comment": false };
+        const values = {};
+        let ok = true;
+        for (const id of Object.keys(required)) {
+          const wrap = root.querySelector(`[data-field="${id}"]`);
+          const input = wrap.querySelector("input");
+          const errorEl = wrap.querySelector(".error");
+          const val = input.value.trim();
+          values[id] = val;
+          const bad = required[id] && val === "";
+          errorEl.textContent = e.required;
+          wrap.classList.toggle("invalid", bad);
+          if (bad) ok = false;
+        }
+        if (!phoneApi.isComplete()) {
+          phoneApi.markInvalid(e.phone);
+          ok = false;
+        }
+        if (!ok) return;
+        state.waitlist = { ...values, phone: phoneApi.toE164() };
+        state.submitting = true;
+        submitBtn.disabled = true;
+        submitBtn.textContent = w.sending;
+        try {
+          const payload = {
+            source: "web",
+            name: values["wl-name"],
+            phone: phoneApi.toE164(),
+            city: values["wl-zone"],
+            comment: values["wl-comment"],
+          };
+          // Attach paid-social attribution (empty object when none captured).
+          Object.assign(payload, attribution);
+          const res = await fetch(`${API}/api/waitlist`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error("waitlist failed");
+          await res.json();
+          track("waitlist_submitted", { zone: values["wl-zone"] });
+          root.innerHTML =
+            `<h3>${w.successTitle}</h3>` +
+            `<p class="status-msg success">${esc(w.success)}</p>` +
+            `<div class="wizard-actions"><a class="btn btn-whatsapp" data-wa-loc="waitlist_success" target="_blank" rel="noopener" href="${waHref}">${W.waFallback}</a></div>`;
+        } catch {
+          state.submitting = false;
+          submitBtn.disabled = false;
+          submitBtn.textContent = w.submit;
+          alert(W.genericError);
+        }
+      });
     },
 
     // 2. Priced catalog for the selected city (rendered as returned).
     async product() {
-      root.innerHTML = `<h3>${W.productStep.title}</h3><p class="status-msg">${W.productStep.loading}</p>`;
+      track("wizard_step", { step: "product", n: 2 });
+      root.innerHTML = progress(2) + `<h3>${W.productStep.title}</h3><p class="status-msg">${W.productStep.loading}</p>`;
       try {
         const res = await fetch(`${API}/api/prices?city=${encodeURIComponent(state.city)}`);
         if (!res.ok) throw new Error("prices failed");
         state.catalog = await res.json();
       } catch {
-        root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + backButton("city");
+        root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + deadEndActions("city");
         bindBack();
         return;
       }
+      const products = state.catalog.products;
+      // Preserve prior quantities when returning to this step (e.g. Back from data).
+      const qty = {};
+      (state.cart || []).forEach((c) => {
+        const i = products.findIndex((p) => (c.id != null && p.id === c.id) || p.name === c.name);
+        if (i >= 0) qty[i] = c.qty;
+      });
+      const cards = products
+        .map(
+          (p, i) =>
+            `<div class="cart-card">` +
+            `<div class="product-img"><img src="${productImage(p.name)}" alt="${esc(p.name)}" width="120" height="120" loading="lazy" /></div>` +
+            `<p class="cart-name">${esc(p.name)}</p>` +
+            `<p class="cart-price">${money(p.price)}</p>` +
+            `<div class="qty-stepper">` +
+            `<button type="button" class="qty-btn" data-dec="${i}"${qty[i] ? "" : " disabled"}>&minus;</button>` +
+            `<span class="qty" data-qty="${i}">${qty[i] || 0}</span>` +
+            `<button type="button" class="qty-btn" data-inc="${i}">+</button>` +
+            `</div></div>`,
+        )
+        .join("");
       root.innerHTML =
-        `<h3>${W.productStep.title}</h3><div class="option-list">` +
-        state.catalog.products
-          .map(
-            (p, i) =>
-              `<button data-product="${i}">${esc(p.name)}<span class="price">$${esc(p.price)}</span></button>`,
-          )
-          .join("") +
-        `</div>` +
-        backButton("city");
+        progress(2) +
+        `<h3>${W.productStep.title}</h3>` +
+        `<div class="wizard-cart">${cards}</div>` +
+        `<div class="cart-bar"><span class="cart-total-label">${W.productStep.total}</span>` +
+        `<span class="cart-total" data-cart-total></span></div>` +
+        `<div class="wizard-actions"><button class="btn btn-secondary" data-back="city">${W.back}</button>` +
+        `<button class="btn btn-primary" id="cart-continue">${W.productStep.continue}</button></div>`;
       bindBack();
-      root.querySelectorAll("[data-product]").forEach((b) =>
+
+      const totalEl = root.querySelector("[data-cart-total]");
+      const continueBtn = document.getElementById("cart-continue");
+      const refresh = () => {
+        let total = 0;
+        let count = 0;
+        products.forEach((p, i) => {
+          total += p.price * (qty[i] || 0);
+          count += qty[i] || 0;
+        });
+        totalEl.textContent = money(total);
+        continueBtn.disabled = count === 0;
+      };
+      refresh();
+      root.querySelectorAll("[data-inc]").forEach((b) =>
         b.addEventListener("click", () => {
-          state.product = state.catalog.products[Number(b.dataset.product)];
-          steps.data();
+          const i = Number(b.dataset.inc);
+          qty[i] = (qty[i] || 0) + 1;
+          root.querySelector(`[data-qty="${i}"]`).textContent = qty[i];
+          root.querySelector(`[data-dec="${i}"]`).disabled = false;
+          refresh();
         }),
       );
+      root.querySelectorAll("[data-dec]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const i = Number(b.dataset.dec);
+          if (!qty[i]) return;
+          qty[i] -= 1;
+          root.querySelector(`[data-qty="${i}"]`).textContent = qty[i];
+          if (!qty[i]) b.disabled = true;
+          refresh();
+        }),
+      );
+      continueBtn.addEventListener("click", () => {
+        const cart = products
+          .map((p, i) => ({ id: p.id, name: p.name, price: p.price, qty: qty[i] || 0 }))
+          .filter((c) => c.qty > 0);
+        if (!cart.length) return;
+        state.cart = cart;
+        track("cart_continue", {
+          items: cart.length,
+          total: cart.reduce((s, c) => s + c.price * c.qty, 0),
+        });
+        saveState();
+        steps.data();
+      });
     },
 
     // 3. Delivery-data form with client-side validation.
     data() {
+      track("wizard_step", { step: "data", n: 3 });
       const d = W.dataStep;
       const prev = state.data || {};
-      const field = (id, label, value) =>
+      const areaCode = COPY.coverage.areaCodes[state.city];
+      // Returning to edit: rebuild the mask's digits from the saved E.164. Fresh
+      // entry: prefill the city's own area code (the local number stays blank).
+      const initialDigits = prev.phone ? phoneDigitsFromE164(prev.phone) : "549" + (areaCode || "");
+      // Semantic input attributes so mobile autofill + the right keyboard work
+      // (critical for the in-app-browser paid-social audience, 04 §5.3).
+      const field = (id, label, value, attrs) =>
         `<div class="field" data-field="${id}"><label for="${id}">${label}</label>` +
-        `<input id="${id}" value="${esc(value || "")}" autocomplete="off" />` +
+        `<input id="${id}" value="${esc(value || "")}" ${attrs || ""} />` +
         `<span class="error">${d.errors.required}</span></div>`;
+      const phone = phoneField("phone", d.phone, initialDigits);
       root.innerHTML =
+        progress(3) +
         `<h3>${d.title}</h3>` +
-        field("firstName", d.firstName, prev.firstName) +
-        field("lastName", d.lastName, prev.lastName) +
-        field("phone", d.phone, prev.phone) +
-        field("street", d.street, prev.street) +
-        field("number", d.number, prev.number) +
-        field("crossStreets", d.crossStreets, prev.crossStreets) +
+        `<p class="wizard-city">${esc(d.cityLabel)}: <strong>${esc(state.city)}</strong></p>` +
+        field("firstName", d.firstName, prev.firstName, 'autocomplete="given-name" autocapitalize="words"') +
+        field("lastName", d.lastName, prev.lastName, 'autocomplete="family-name" autocapitalize="words"') +
+        phone.html +
+        field("direccion", d.direccion, prev.direccion, `autocomplete="off" autocapitalize="words" placeholder="${esc(d.direccionPlaceholder)}"`) +
+        field("piso", d.piso, prev.piso, 'autocomplete="off"') +
+        field("crossStreets", d.crossStreets, prev.crossStreets, 'autocomplete="off" autocapitalize="words"') +
         `<div class="wizard-actions"><button class="btn btn-secondary" data-back="product">${W.back}</button>` +
         `<button class="btn btn-primary" id="data-next">${d.next}</button></div>`;
       bindBack();
+      attachPlaces();
+      const phoneApi = phone.bind();
       document.getElementById("data-next").addEventListener("click", () => {
         const values = {};
+        const required = ["firstName", "lastName", "direccion"];
         let ok = true;
-        for (const id of ["firstName", "lastName", "phone", "street", "number", "crossStreets"]) {
+        for (const id of ["firstName", "lastName", "direccion", "piso", "crossStreets"]) {
           const wrap = root.querySelector(`[data-field="${id}"]`);
           const input = wrap.querySelector("input");
           const errorEl = wrap.querySelector(".error");
           values[id] = input.value.trim();
-          let bad = values[id] === "";
-          if (!bad && id === "phone" && !/^\+?[\d\s-]{8,16}$/.test(values[id])) {
-            bad = true;
-            errorEl.textContent = d.errors.phone;
-          } else {
-            errorEl.textContent = d.errors.required;
-          }
+          const bad = required.includes(id) && values[id] === "";
+          errorEl.textContent = d.errors.required;
           wrap.classList.toggle("invalid", bad);
           if (bad) ok = false;
         }
+        if (!phoneApi.isComplete()) {
+          phoneApi.markInvalid(d.errors.phone);
+          ok = false;
+        }
         if (!ok) return;
+        values.phone = phoneApi.toE164();
         state.data = values;
+        saveState();
         steps.day();
       });
     },
 
     // 4. Live coverage check + delivery-day picker.
     async day() {
-      root.innerHTML = `<h3>${W.dayStep.title}</h3><p class="status-msg">${W.dayStep.checking}</p>`;
+      track("wizard_step", { step: "day", n: 4 });
+      root.innerHTML = progress(4) + `<h3>${W.dayStep.title}</h3><p class="status-msg">${W.dayStep.checking}</p>`;
       try {
         const res = await fetch(`${API}/api/coverage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             city: state.city,
-            address: `${state.data.street} ${state.data.number}`,
+            address: addressString(state.data),
             cross_streets: state.data.crossStreets,
           }),
         });
         if (!res.ok) throw new Error("coverage failed");
         state.coverage = await res.json();
       } catch {
-        root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + backButton("data");
+        root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + deadEndActions("data");
         bindBack();
         return;
       }
       if (!state.coverage.covered || state.coverage.delivery_options.length === 0) {
         // Polite no-coverage path (04 §5); the backend records/labels the lead.
-        root.innerHTML = `<p class="status-msg">${W.noCoverage.address}</p>` + backButton("data");
+        track("no_coverage", { stage: "address" });
+        root.innerHTML = `<p class="status-msg">${W.noCoverage.address}</p>` + deadEndActions("data");
         bindBack();
         return;
       }
+      track("coverage_result", { covered: true, options: state.coverage.delivery_options.length });
       root.innerHTML =
+        progress(4) +
         `<h3>${W.dayStep.title}</h3><div class="option-list">` +
         state.coverage.delivery_options
           .map(
@@ -225,6 +796,7 @@
       root.querySelectorAll("[data-option]").forEach((b) =>
         b.addEventListener("click", () => {
           state.option = state.coverage.delivery_options[Number(b.dataset.option)];
+          saveState();
           steps.summary();
         }),
       );
@@ -232,12 +804,20 @@
 
     // 5. Summary + confirm (double-click guarded).
     summary() {
+      track("wizard_step", { step: "summary", n: 5 });
       const s = W.summaryStep;
+      const total = state.cart.reduce((sum, c) => sum + c.price * c.qty, 0);
       root.innerHTML =
+        progress(5) +
         `<h3>${s.title}</h3><ul class="summary-list">` +
-        `<li><span>${s.product}</span><span>${esc(state.product.name)}</span></li>` +
-        `<li><span>${s.price}</span><span>$${esc(state.product.price)}</span></li>` +
-        `<li><span>${s.address}</span><span>${esc(`${state.data.street} ${state.data.number}, ${state.city}`)}</span></li>` +
+        state.cart
+          .map(
+            (c) =>
+              `<li><span>${esc(c.qty + "x " + c.name)}</span><span>${money(c.price * c.qty)}</span></li>`,
+          )
+          .join("") +
+        `<li class="summary-total"><span>${s.total}</span><span>${money(total)}</span></li>` +
+        `<li><span>${s.address}</span><span>${esc(addressString(state.data) + ", " + state.city)}</span></li>` +
         `<li><span>${s.day}</span><span>${esc(
           W.dayStep.optionLabel(state.option.route, state.option.weekday, state.option.time_window),
         )}</span></li></ul>` +
@@ -251,27 +831,40 @@
         confirmBtn.disabled = true;
         confirmBtn.textContent = s.sending;
         try {
+          const payload = {
+            source: "web",
+            name: `${state.data.firstName} ${state.data.lastName}`,
+            phone: state.data.phone,
+            city: state.city,
+            address: addressString(state.data),
+            cross_streets: state.data.crossStreets,
+            items: state.cart.map((c) => ({ product: c.name, qty: c.qty })),
+            delivery_day: state.option.weekday,
+            delivery_window: state.option.time_window,
+          };
+          // Attach paid-social attribution (empty object when none captured).
+          Object.assign(payload, attribution);
           const res = await fetch(`${API}/api/orders`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              source: "web",
-              name: `${state.data.firstName} ${state.data.lastName}`,
-              phone: state.data.phone,
-              city: state.city,
-              address: `${state.data.street} ${state.data.number}`,
-              cross_streets: state.data.crossStreets,
-              product: state.product.name,
-              delivery_day: state.option.weekday,
-              delivery_window: state.option.time_window,
-            }),
+            body: JSON.stringify(payload),
           });
           if (!res.ok) throw new Error("order failed");
           await res.json();
+          track("order_confirmed", {
+            city: state.city,
+            items: state.cart.length,
+            price: total,
+            delivery_day: state.option.weekday,
+          });
+          clearState();
           root.innerHTML =
-            `<h3>${W.successTitle}</h3><p class="status-msg success">${esc(
+            `<h3>${W.successTitle}</h3>` +
+            `<p class="status-msg success">${esc(
               W.success(state.option.weekday, state.option.time_window),
-            )}</p>`;
+            )}</p>` +
+            `<p class="wizard-hint">${W.successHint}</p>` +
+            `<div class="wizard-actions"><a class="btn btn-whatsapp" data-wa-loc="success" target="_blank" rel="noopener" href="${waHref}">${W.waFallback}</a></div>`;
         } catch {
           state.submitting = false;
           confirmBtn.disabled = false;
@@ -282,5 +875,34 @@
     },
   };
 
-  steps.city();
+  // Boot (both pages, no mode flag): ?waitlist → waitlist form; ?city present →
+  // product/resume; absent → picker.
+  if (root) {
+    const params = new URLSearchParams(window.location.search);
+    const urlCity = (() => {
+      const slug = params.get("city");
+      return slug ? slugToCity(slug) : null;
+    })();
+    if (params.get("waitlist")) {
+      steps.waitlist();
+    } else if (!urlCity) {
+      steps.city();
+    } else {
+      state.city = urlCity;
+      track("wizard_start", { city: urlCity });
+      const saved = loadState();
+      if (saved && saved.city === urlCity) {
+        state.cart = saved.cart || null;
+        state.data = saved.data || null;
+        state.option = saved.option || null;
+        const hasCart = state.cart && state.cart.length;
+        if (hasCart && state.data && state.option) steps.summary();
+        else if (hasCart && state.data) steps.day();
+        else if (hasCart) steps.data();
+        else steps.product();
+      } else {
+        steps.product();
+      }
+    }
+  }
 })();

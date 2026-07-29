@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Alta automática · CIMES</title>
+  <meta name="description" content="Darte de alta en CIMES: elegí tu producto, dejanos tu dirección y coordinamos tu reparto semanal de agua y soda a domicilio." />
+  <meta name="robots" content="index,follow" />
+  <meta property="og:title" content="Alta automática · CIMES" />
+  <meta property="og:description" content="Alta online en 2 minutos: agua, soda y dispensers con reparto semanal a domicilio." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="/assets/logo-cimes.png" />
+  <link rel="icon" href="/assets/logo-cimes.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <!-- Fonts loaded non-render-blocking (media=print swap); noscript keeps a plain fallback. -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@600;700;800&family=Roboto:wght@400;500;700&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@600;700;800&family=Roboto:wght@400;500;700&display=swap" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@600;700;800&family=Roboto:wght@400;500;700&display=swap" /></noscript>
+  <link rel="stylesheet" href="/styles.css" />
+  <!-- Analytics (deploy-time). Same inert-until-configured pattern as the homepage:
+       both stay dormant while the placeholder ids are present. -->
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    (function () {
+      var GTM_ID = "GTM-XXXXXXX"; // deploy: replace with the client's container id
+      if (GTM_ID.indexOf("XXXX") !== -1) return;
+      window.dataLayer.push({ "gtm.start": new Date().getTime(), event: "gtm.js" });
+      var f = document.getElementsByTagName("script")[0],
+          j = document.createElement("script");
+      j.async = true;
+      j.src = "https://www.googletagmanager.com/gtm.js?id=" + GTM_ID;
+      f.parentNode.insertBefore(j, f);
+    })();
+    (function () {
+      var META_PIXEL_ID = "META_PIXEL_ID"; // deploy: replace with the client's pixel id
+      if (!/^\d+$/.test(META_PIXEL_ID)) return;
+      !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+        n.push=n;n.loaded=!0;n.version="2.0";n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+        document,"script","https://connect.facebook.net/en_US/fbevents.js");
+      window.fbq("init", META_PIXEL_ID);
+      window.fbq("track", "PageView");
+    })();
+    // Google Places autocomplete for the Direccion field. Inert until a real
+    // browser key is set at deploy (Places enabled, HTTP-referrer-restricted).
+    // app.js attaches the widget only when window.google.maps.places exists, so
+    // the form works as a plain text input until this loads.
+    (function () {
+      var GOOGLE_MAPS_KEY = "GOOGLE_MAPS_KEY"; // deploy: replace with the client's Maps JS API browser key
+      if (GOOGLE_MAPS_KEY.indexOf("GOOGLE_MAPS_KEY") !== -1) return;
+      var s = document.createElement("script");
+      s.async = true;
+      s.src = "https://maps.googleapis.com/maps/api/js?key=" + GOOGLE_MAPS_KEY +
+        "&libraries=places&language=es&region=AR&loading=async";
+      document.head.appendChild(s);
+    })();
+  </script>
+</head>
+<body id="top" class="alta-page">
+  <!-- GTM noscript fallback (deploy: replace GTM-XXXXXXX with the real container id). -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-XXXXXXX"
+    height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+
+  <a class="skip-link" href="#alta" data-copy="a11y.skip"></a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/" aria-label="CIMES ·inicio">
+        <img src="/assets/logo-cimes.png" alt="CIMES" width="132" height="44" />
+      </a>
+    </div>
+  </header>
+
+  <main>
+    <!-- Self-service signup wizard, focused single-column page. app.js reads the
+         city from ?city=<slug>; without it, it renders the city picker instead. -->
+    <section class="wizard" id="alta" aria-labelledby="alta-title">
+      <div class="section-inner wizard-inner">
+        <div class="wizard-head">
+          <h1 id="alta-title" data-copy="wizard.title"></h1>
+          <p class="wizard-subtitle" data-copy="wizard.subtitle"></p>
+        </div>
+        <div id="wizard-root" class="wizard-card" aria-live="polite"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <img src="/assets/logo-cimes.png" alt="CIMES" width="120" height="40" />
+        <p class="footer-tag" data-copy="footer.tagline"></p>
+      </div>
+      <div class="footer-contact">
+        <a id="footer-email" class="footer-email" href="#"></a>
+        <div class="social" aria-label="Redes sociales">
+          <a id="footer-ig" href="#" target="_blank" rel="noopener" aria-label="Instagram"><img src="/assets/ic-ig.svg" alt="" width="22" height="22" /></a>
+          <a id="footer-fb" href="#" target="_blank" rel="noopener" aria-label="Facebook"><img src="/assets/ic-fb.svg" alt="" width="22" height="22" /></a>
+          <a id="footer-tt" href="#" target="_blank" rel="noopener" aria-label="TikTok"><img src="/assets/ic-tt.svg" alt="" width="22" height="22" /></a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-legal">
+      <a href="/privacy.html" data-copy="footer.privacy"></a>
+      <span data-copy="footer.rights"></span>
+    </div>
+  </footer>
+
+
+  <script src="/config.js"></script>
+  <script src="/copy.es-AR.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
