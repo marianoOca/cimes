@@ -190,3 +190,74 @@ Outbound send (`kapso/send.ts`) verified correct against the reference: base URL
 `X-API-Key`, `/{phone_number_id}/messages`, and all body shapes
 (text/buttons/list/flow/template) match. Both signature schemes (Kapso
 `X-Webhook-Signature` raw-body HMAC; Meta `sha256=`) correct.
+
+## Session (2026-07-29) — website Maps-autocomplete bug fixed
+
+**BUG FOUND + FIXED:** step-3 address autocomplete (`04-website.md` §3) never
+worked on either page. Three compounding causes: (1) the real Maps key was
+added to `src/.env` (`GOOGLE_MAPS_API_KEY`, backend-only, used for server-side
+Geocoding) — the static website has no build step and can never read that
+file; (2) the site's actual hook was a hardcoded placeholder literal inline in
+`website/alta/index.html`'s `<head>`, never edited to a real value; (3) even
+once edited, it would only have worked on `/alta` — `website/index.html` has
+its own copy of the wizard (`#wizard-root`) but never had a Maps-loader block
+at all, so the homepage's inline wizard was always going to be silently
+plain-text (`attachPlaces()` no-ops when `window.google.maps.places` is
+absent, by design — fails quiet, not loud).
+
+Fix: moved the loader out of the per-page inline `<script>` (where it had
+already drifted once) into `app.js` (already the single shared script across
+both pages), reading a new `GOOGLE_MAPS_KEY` from `config.js` — same
+placeholder-until-configured convention as `API_BASE_URL`/
+`WHATSAPP_NUMBER_SALES`. Deploy step is now: set `GOOGLE_MAPS_KEY` in
+`config.js` to a **browser** key (Maps JavaScript API + Places, HTTP-referrer-
+restricted to the domain) — must NOT be the backend's server-side
+`GOOGLE_MAPS_API_KEY`, which is unrestricted server-side and would be
+publicly exposed if reused here.
+
+**Config hygiene:** `website/config.js` was tracked in git (placeholders only,
+so far) with no guard against someone hand-editing it with real deploy values
+and committing that by habit — unlike `src/.env`, which `.gitignore` already
+excludes. Mirrored the backend's `.env`/`.env.example` split: renamed the
+tracked file to `website/config.example.js` (template, placeholders, stays in
+git), added `website/config.js` to `.gitignore`, and left a local
+(untracked) `website/config.js` in place with the same placeholder content so
+the site keeps running as-is until real values are filled. `ops/DEPLOY.md`
+step 2.1 updated to the copy-then-fill instruction. Both `index.html` and
+`alta/index.html` still just `<script src="config.js">` — unchanged, no
+build step added.
+
+## Session (2026-07-29, cont.) — end-to-end HTTPS: DEPLOY.md + backend loopback bind
+
+Follow-up to the Maps-key debugging: generalized to "every connection HTTPS"
+since the backend VPS will be internet-exposed too.
+
+**`ops/DEPLOY.md` rewritten with a concrete TLS recipe** (was a one-line
+"reverse proxy with TLS in front" with no detail): Caddy chosen over
+nginx+certbot (automatic cert issue/renewal/HTTP→HTTPS-redirect in one
+Caddyfile, matches this project's low-infra bias elsewhere — SQLite over
+Postgres, jobs-table over Redis). Recipe covers DNS prerequisite (Let's
+Encrypt can't cert a bare IP), `ufw` (80/443 only), a Caddyfile proxying to
+the backend (`127.0.0.1:3000`) and Chatwoot (`127.0.0.1:3001`, already
+correctly loopback-bound in its compose) off the same instance. Website
+section gained the matching step: Hostinger hPanel AutoSSL + Force-HTTPS.
+Framed as a functional requirement, not just hardening — Kapso and Meta both
+reject self-signed webhook endpoints.
+
+**BUG FOUND + FIXED:** `src/src/index.ts:109` bound Fastify to `host:
+"0.0.0.0"` (all interfaces) — contradicted the loopback-only architecture the
+DEPLOY.md rewrite above now documents as fact. As shipped, port 3000 would
+have been directly reachable over plain HTTP from the public internet
+regardless of Caddy, with `ufw` as the only actual barrier. Fixed to
+`"127.0.0.1"`. Hardcoded, not a new `HOST` env var — this backend's only
+deployed shape is "behind Caddy on the same box," so a configurable host
+would be unused flexibility (would've also needed a `config.ts` schema entry
++ `.env.example` line + a `docs/00-master.md §8` table update, per that
+file's own documentation convention, for no real benefit). Confirmed via
+`src/test/` that nothing starts the real server, so nothing to break;
+`npm run typecheck` + `npm test` (72 passed) both clean after the change.
+
+**Still manual/pending actual VPS:** DNS record, `ufw` rules, Caddy install +
+Caddyfile, domain names for `<backend-domain>`/`<chatwoot-domain>` — all
+spec'd in `ops/DEPLOY.md`, blocked on the client's infra per the existing
+"Blocked / waiting on client" list.

@@ -24,6 +24,23 @@
     encodeURIComponent(COPY.dualCta.whatsapp.prefill);
   document.querySelectorAll(".wa-link").forEach((a) => (a.href = waHref));
 
+  // Google Maps JS (Places library), for the wizard's address-autocomplete field
+  // (attachPlaces(), used on both / and /alta — the wizard is inline on both).
+  // Inert until a real browser key is set in config.js; attachPlaces() no-ops
+  // while window.google.maps.places is absent, so the field stays a plain text
+  // input either way. Loaded once here so both pages get it identically instead
+  // of duplicating this per-page (that drifted before: only /alta had it).
+  (function loadGoogleMaps() {
+    const key = CFG.GOOGLE_MAPS_KEY;
+    if (!key || key === "GOOGLE_MAPS_KEY") return;
+    const s = document.createElement("script");
+    s.async = true;
+    s.src =
+      "https://maps.googleapis.com/maps/api/js?key=" + key +
+      "&libraries=places&language=es&region=AR&loading=async";
+    document.head.appendChild(s);
+  })();
+
   // ---------- measurement (04 §8): dataLayer funnel events + Meta Pixel ----------
   // Self-initializing and guarded: a no-op when GTM/Pixel are absent (tests, or
   // before the ids are configured at deploy).
@@ -458,6 +475,31 @@
       fields: ["address_components", "formatted_address", "geometry"],
       types: ["address"],
     });
+    // Restrict suggestions to a radius around the selected city's center, not the
+    // city's exact viewport. Two reasons: (1) it includes the outskirts — people
+    // who consider themselves "in" the city but live just outside it still get
+    // matches; (2) the box is generous enough that strictBounds works here without
+    // the empty-dropdown problem a tight town viewport causes. Google's
+    // componentRestrictions only filters by country, so this radius box is how we
+    // exclude other cities. Best-effort: if the geocode fails or Geocoder is
+    // absent, we fall back to country-only — the backend coverage check (step 4)
+    // is the authority on the address anyway.
+    const CITY_RADIUS_M = 20000; // ~20 km: covers outskirts, excludes neighbouring cities
+    if (state.city && window.google.maps.Geocoder) {
+      new window.google.maps.Geocoder().geocode(
+        { address: state.city + ", Provincia de Buenos Aires, Argentina" },
+        (results, status) => {
+          const c = status === "OK" && results[0] && results[0].geometry && results[0].geometry.location;
+          if (!c) return;
+          const lat = c.lat();
+          const lng = c.lng();
+          const dLat = CITY_RADIUS_M / 111320;
+          const dLng = CITY_RADIUS_M / (111320 * Math.cos((lat * Math.PI) / 180));
+          ac.setBounds({ south: lat - dLat, west: lng - dLng, north: lat + dLat, east: lng + dLng });
+          ac.setOptions({ strictBounds: true });
+        },
+      );
+    }
     ac.addListener("place_changed", () => {
       const place = ac.getPlace();
       const comp = {};

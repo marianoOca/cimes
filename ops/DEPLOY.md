@@ -31,22 +31,59 @@ EnvironmentFile=/opt/cimes/src/.env
 WantedBy=multi-user.target
 ```
 
-Reverse proxy with TLS in front of `PORT` (default 3000). Public paths needed:
-`/api/*`, `/webhooks/kapso`, `/webhooks/chatwoot`, `/webhooks/meta`, `/health`.
 Back up `cimes.db` (SQLite, WAL mode) nightly.
 
-Point Kapso's webhook at `https://<backend>/webhooks/kapso` with
+### TLS (Caddy)
+
+Backend binds to `127.0.0.1` only (`src/src/index.ts`) — the only way in from
+outside is through the reverse proxy below. Not optional hardening: Kapso and
+Meta both reject self-signed webhook endpoints, so there's no working deploy
+without real TLS in front.
+
+1. DNS: point `<backend-domain>` (e.g. `api.cimes-silva.com.ar`) at the VPS IP
+   before requesting a cert — Let's Encrypt can't issue for a bare IP.
+2. Firewall: `ufw allow 22,80,443/tcp` then `ufw enable` — nothing else public,
+   port 3000 (and Chatwoot's 3001) must never be reachable from outside the box.
+3. Install Caddy, then:
+
+   ```caddyfile
+   # /etc/caddy/Caddyfile
+   <backend-domain> {
+     reverse_proxy 127.0.0.1:3000
+   }
+
+   <chatwoot-domain> {
+     reverse_proxy 127.0.0.1:3001
+   }
+   ```
+
+   `systemctl reload caddy`. Cert issuance, renewal, and HTTP→HTTPS redirect
+   are automatic — no certbot cron, no separate redirect block, and the same
+   instance covers Chatwoot (already bound to `127.0.0.1:3001` in its compose).
+
+Public paths needed behind it: `/api/*`, `/webhooks/kapso`, `/webhooks/chatwoot`,
+`/webhooks/meta`, `/health`.
+
+Point Kapso's webhook at `https://<backend-domain>/webhooks/kapso` with
 `KAPSO_WEBHOOK_SECRET`; create + publish the delivery-data WhatsApp Flow in
-Kapso and set `KAPSO_DELIVERY_FLOW_ID`.
+Kapso and set `KAPSO_DELIVERY_FLOW_ID`. Same domain (never the bare IP or
+port 3000) goes into the website's `API_BASE_URL` below and the Meta leadgen
+webhook URL in the day-1 tasks.
 
 ## 2. Website (Hostinger)
 
 Upload the contents of `website/` as-is (static files) via Hostinger's file
 manager/FTP. Before uploading:
-1. Edit `website/config.js` — real `API_BASE_URL` + `WHATSAPP_NUMBER_SALES`.
-2. Paste the client's GTM container snippet into `index.html` (marked slots).
-3. Update `sitemap.xml`/`robots.txt` domain if it isn't `www.cimes.com.ar`.
-4. After deploy: run mobile Lighthouse on the live URL (acceptance ≥ 90).
+1. Copy `website/config.example.js` to `website/config.js` (gitignored — never
+   commit it) and fill real `API_BASE_URL` (`https://<backend-domain>` from
+   above — never `http://` or the bare IP), `WHATSAPP_NUMBER_SALES`,
+   `GOOGLE_MAPS_KEY` (browser key, HTTP-referrer-restricted — not the backend's
+   server-side `GOOGLE_MAPS_API_KEY`).
+2. Enable free TLS in Hostinger's hPanel (SSL/AutoSSL) and turn on "Force
+   HTTPS" (or an `.htaccess` redirect if that toggle isn't available).
+3. Paste the client's GTM container snippet into `index.html` (marked slots).
+4. Update `sitemap.xml`/`robots.txt` domain if it isn't `www.cimes.com.ar`.
+5. After deploy: run mobile Lighthouse on the live URL (acceptance ≥ 90).
 
 ## 3. Chatwoot
 

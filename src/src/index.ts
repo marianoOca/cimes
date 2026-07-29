@@ -106,7 +106,7 @@ runner.start();
 
 const app = buildServer(db);
 app
-  .listen({ port: config.PORT, host: "0.0.0.0" })
+  .listen({ port: config.PORT, host: "127.0.0.1" })
   .then(() => console.log(`cimes backend listening on :${config.PORT}`))
   .catch((err) => {
     console.error(err);

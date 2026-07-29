@@ -43,19 +43,6 @@
       window.fbq("init", META_PIXEL_ID);
       window.fbq("track", "PageView");
     })();
-    // Google Places autocomplete for the Direccion field. Inert until a real
-    // browser key is set at deploy (Places enabled, HTTP-referrer-restricted).
-    // app.js attaches the widget only when window.google.maps.places exists, so
-    // the form works as a plain text input until this loads.
-    (function () {
-      var GOOGLE_MAPS_KEY = "GOOGLE_MAPS_KEY"; // deploy: replace with the client's Maps JS API browser key
-      if (GOOGLE_MAPS_KEY.indexOf("GOOGLE_MAPS_KEY") !== -1) return;
-      var s = document.createElement("script");
-      s.async = true;
-      s.src = "https://maps.googleapis.com/maps/api/js?key=" + GOOGLE_MAPS_KEY +
-        "&libraries=places&language=es&region=AR&loading=async";
-      document.head.appendChild(s);
-    })();
   </script>
 </head>
 <body id="top" class="alta-page">

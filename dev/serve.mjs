@@ -5,7 +5,8 @@
 //
 //   node qa-server.mjs
 //   env: WEBSITE_DIR (required), BACKEND=http://localhost:3000, PORT=8080,
-//        WA_NUMBER=<sales wa number for the deep links>
+//        WA_NUMBER=<sales wa number for the deep links>,
+//        MAPS_KEY=<Google Maps browser key, for Places autocomplete testing>
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { join, extname, normalize } from "node:path";
@@ -14,6 +15,7 @@ const WEBSITE_DIR = process.env.WEBSITE_DIR;
 const BACKEND = (process.env.BACKEND || "http://localhost:3000").replace(/\/$/, "");
 const PORT = Number(process.env.PORT || 8080);
 const WA_NUMBER = process.env.WA_NUMBER || "5491100000000";
+const MAPS_KEY = process.env.MAPS_KEY || "";
 
 if (!WEBSITE_DIR) {
   console.error("WEBSITE_DIR env is required");
@@ -34,7 +36,8 @@ const MIME = {
 
 // Same-origin config: API_BASE_URL="" -> wizard fetches "/api/..." on this host.
 const CONFIG_JS =
-  `window.CIMES_CONFIG = { API_BASE_URL: "", WHATSAPP_NUMBER_SALES: "${WA_NUMBER}" };\n`;
+  `window.CIMES_CONFIG = { API_BASE_URL: "", WHATSAPP_NUMBER_SALES: "${WA_NUMBER}", ` +
+  `GOOGLE_MAPS_KEY: "${MAPS_KEY}" };\n`;
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);

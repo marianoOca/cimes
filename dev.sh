@@ -6,12 +6,20 @@
 #   ./dev.sh --real   real backend (src: npm run dev, reads src/.env) + website
 #
 # Website:  http://localhost:$WEB_PORT   (the /api/* calls are proxied to the backend)
-# Overrides: WEB_PORT (8080), API_PORT (stub, 4590), REAL_PORT (real backend, 3000)
+# Overrides: WEB_PORT (8080), API_PORT (stub, 4590), REAL_PORT (real backend, 3000),
+#            MAPS_KEY (Google Maps browser key, for Places autocomplete testing)
 #
 # The website is a static site; dev/serve.mjs serves it and proxies /api/* to the
 # backend, and rewrites config.js so the wizard talks to this same origin.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# The website's Maps autocomplete reuses the backend's key from src/.env for local
+# testing (MAPS_KEY env var still overrides it if set). Not for production — deploy
+# uses a separate browser-restricted key in website/config.js (ops/DEPLOY.md).
+if [ -z "${MAPS_KEY:-}" ] && [ -f src/.env ]; then
+  MAPS_KEY="$(grep -E '^GOOGLE_MAPS_API_KEY=' src/.env | head -1 | cut -d= -f2-)"
+fi
 
 WEB_PORT="${WEB_PORT:-8080}"
 API_PORT="${API_PORT:-4590}"
@@ -49,7 +57,7 @@ else
 fi
 
 sleep 1
-WEBSITE_DIR="$(pwd)/website" PORT="$WEB_PORT" BACKEND="$BACKEND" node dev/serve.mjs &
+WEBSITE_DIR="$(pwd)/website" PORT="$WEB_PORT" BACKEND="$BACKEND" MAPS_KEY="${MAPS_KEY:-}" node dev/serve.mjs &
 pids+=($!)
 
 echo
