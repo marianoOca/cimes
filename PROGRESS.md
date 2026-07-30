@@ -4,11 +4,38 @@
 
 Day-1 scaffold done. Backend (core-api + chatbot, `src/`) AND website (`website/`,
 Flow B) built: typecheck clean, 37 tests passing (32 backend + 5 website DOM tests
-driving the real wizard in jsdom against a stubbed API). Not yet run against real
-Kapso/WaterService — external credentials pending from the client. Ops artifacts done
+driving the real wizard in jsdom against a stubbed API). WaterService credentials are
+now set (`src/.env`, base `https://cimessilva.sistemaws.com/`) and the coverage path is
+**verified live** (2026-07-29): login + endpoint #12 return real coverage. Kapso still
+not run against the live account. Ops artifacts done
 (`ops/DEPLOY.md`, `ops/chatwoot/` compose + wiring guide); actual VPS/Chatwoot deploy
 happens when the client's infra is available. All four module docs (01/02/03/04) now
 have their build counterpart; test count 38.
+
+**Live WaterService coverage check (2026-07-29).** Read-only smoke against the real API
+(`GeocodingProvider.resolve`, endpoint #12) for a Mercedes address: `covered: true`,
+`price_list: "6"`, real reparto/weekday/time-window options returned — connection + token
+auth + mapping all work.
+- **Fixed:** coverage returned **98 delivery options** (every route inside the 10 km
+  `COVERAGE_RADIUS_M`). Scoped `providers/geocoding.ts` to the nearest neighbor's serving
+  reparto — one option per weekday, week-ordered. Same address now returns **6** options,
+  all `reparto 8`. Also fixed a latent alta bug: `pipeline/orders.ts` mapped the chosen
+  weekday to the *first* matching option's reparto, which could be a route that doesn't
+  serve the address; now every option shares the serving reparto. typecheck clean, 72 tests.
+- **Resolved — coverage latency via radius.** `COVERAGE_RADIUS_M` dropped 10000 → **1000**
+  (`.env`, `.env.example`, and the `config.ts` default so a missing env can't revert to 10 km).
+  The old ~13 s was the #12 geo-query scanning the whole town at 10 km; measured live at 1 km
+  it is ~2 s first call, ~0.9 s once the token is cached. **Tradeoff:** radius also controls how
+  many of the serving route's delivery days are discoverable — options for the Mercedes test
+  address dropped 6 → 2 (martes/viernes) — and may flip outskirt addresses to `covered:false`.
+  Watch during real use; bump back toward ~2–3 km if too tight.
+- **Write path unverified live.** Coverage (#12, read) is proven live; the **writes are not** —
+  `#6 alta`, `#7 contact`, and `#3 ticket` (the order-as-note, fired day-before by the dispatch
+  cron) are code-complete and failure-safe (retry queue + operator alert on `error != 0`) but
+  have **never executed against real WaterService**. Order model is settled: no order endpoint
+  exists — the order travels as the #3 ticket note (`docs/01-core-api §4.5`); our scope ends when
+  that note lands. **Next real step:** one live end-to-end alta+contact+ticket with a disposable
+  test client, then delete it. Also confirm the dispatch cron is deployed/running.
 
 ## Last session (2026-07-19)
 

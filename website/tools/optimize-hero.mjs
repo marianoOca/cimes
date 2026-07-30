@@ -1,6 +1,6 @@
 // One-off: generate optimized WebP hero variants for the CIMES site.
-// The originals (hero-mobile.png, hero-desktop.jpg) stay as fallbacks; index.html
-// serves the WebP via <picture>/image-set with the original as fallback.
+// styles.css serves the WebP via image-set(); hero-desktop.jpg is the no-webp
+// fallback for both breakpoints.
 //
 // `sharp` is NOT a runtime dependency of the site or backend. Install it only to
 // run this script, then commit the generated .webp files:
@@ -14,9 +14,10 @@ import { dirname, join } from "node:path";
 const assets = join(dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 const jobs = [
-  // Mobile hero: photographic content shipped as a 513 KB PNG at 480w. WebP at
-  // the same width is an order of magnitude smaller and becomes a clean LCP.
-  { in: "hero-mobile.png", out: "hero-mobile.webp", width: 480, quality: 80 },
+  // Mobile hero: downscaled from the 1580x600 desktop master (the standalone
+  // hero-mobile.png master is only 480w — too low-res, it looked pixelated once
+  // served). 1280w keeps it crisp on phones behind the gradient at ~38 KB.
+  { in: "hero-desktop.jpg", out: "hero-mobile.webp", width: 1280, quality: 78 },
   // Desktop hero background (1580x600).
   { in: "hero-desktop.jpg", out: "hero-desktop.webp", width: 1580, quality: 78 },
 ];

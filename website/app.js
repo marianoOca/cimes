@@ -26,20 +26,33 @@
 
   // Google Maps JS (Places library), for the wizard's address-autocomplete field
   // (attachPlaces(), used on both / and /alta — the wizard is inline on both).
-  // Inert until a real browser key is set in config.js; attachPlaces() no-ops
-  // while window.google.maps.places is absent, so the field stays a plain text
-  // input either way. Loaded once here so both pages get it identically instead
-  // of duplicating this per-page (that drifted before: only /alta had it).
-  (function loadGoogleMaps() {
+  // Loaded lazily, only once the wizard reaches the data/address step, instead of
+  // on every page load — most mobile visitors never reach step 3, so this keeps
+  // first paint lighter for the in-app-browser paid-social audience. Inert until
+  // a real browser key is set in config.js; attachPlaces() no-ops while
+  // window.google.maps.places is absent, so the field stays a plain text input
+  // either way.
+  let mapsRequested = false;
+  function loadGoogleMaps() {
+    if (mapsRequested) return;
     const key = CFG.GOOGLE_MAPS_KEY;
     if (!key || key === "GOOGLE_MAPS_KEY") return;
+    mapsRequested = true;
     const s = document.createElement("script");
     s.async = true;
     s.src =
       "https://maps.googleapis.com/maps/api/js?key=" + key +
       "&libraries=places&language=es&region=AR&loading=async";
+    // With loading=async the script's onload resolves before the places library
+    // is materialized, so google.maps.places is still undefined at that point.
+    // importLibrary("places") waits for it, then attachPlaces() can bind.
+    s.onload = () => {
+      const maps = window.google && window.google.maps;
+      if (maps && maps.importLibrary) maps.importLibrary("places").then(attachPlaces);
+      else attachPlaces();
+    };
     document.head.appendChild(s);
-  })();
+  }
 
   // ---------- measurement (04 §8): dataLayer funnel events + Meta Pixel ----------
   // Self-initializing and guarded: a no-op when GTM/Pixel are absent (tests, or
@@ -242,8 +255,13 @@
       if (navCta) navCta.classList.toggle("is-visible", past);
     }
     update();
-    window.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
+    let raf = 0;
+    function onScroll() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; update(); });
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
   })();
 
   // Canvas background is white by default (matches top-of-page bounce);
@@ -255,8 +273,13 @@
       document.body.classList.toggle("is-at-bottom", atBottom);
     }
     update();
-    window.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
+    let raf = 0;
+    function onScroll() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; update(); });
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
   })();
 
   // ---------- wizard (Flow B) ----------
@@ -764,6 +787,7 @@
         `<div class="wizard-actions"><button class="btn btn-secondary" data-back="product">${W.back}</button>` +
         `<button class="btn btn-primary" id="data-next">${d.next}</button></div>`;
       bindBack();
+      loadGoogleMaps();
       attachPlaces();
       const phoneApi = phone.bind();
       document.getElementById("data-next").addEventListener("click", () => {

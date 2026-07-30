@@ -43,7 +43,7 @@ const envSchema = z.object({
   ORDERS_SHEET_ID: z.string().default(""),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
   GEOCODING_PROVIDER: z.enum(["waterservice", "googlemaps"]).default("waterservice"),
-  COVERAGE_RADIUS_M: z.coerce.number().default(10000),
+  COVERAGE_RADIUS_M: z.coerce.number().default(1000),
 
   // core-api — follow-ups / debt
   BUSINESS_HOURS: z.string().regex(/^\d{2}-\d{2}$/).default("09-21"),

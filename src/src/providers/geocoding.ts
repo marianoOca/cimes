@@ -13,16 +13,33 @@ function hourOf(time: string | null | undefined): string {
   return time.split(":")[0] ?? "";
 }
 
-function optionsFromNeighbors(neighbors: WsNeighbor[]): DeliveryOption[] {
-  const byKey = new Map<string, DeliveryOption>();
+// The delivery route is fixed by where the customer lives — it is not a choice. Scope the
+// day options to the reparto that serves the nearest neighbors. Aggregating every neighbor's
+// route (a 10 km radius pulls the whole town) produced dozens of redundant day buttons and
+// let the alta (pipeline/orders) pick a reparto that doesn't actually serve the address.
+const WEEKDAY_ORDER = [
+  "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo",
+];
+
+/** reparto_id of the closest neighbor that has a visit schedule, or null if none do. */
+function servingRepartoId(sortedNeighbors: WsNeighbor[]): number | null {
+  for (const n of sortedNeighbors) {
+    if (n.visitas.length > 0) return n.visitas[0]!.reparto_id;
+  }
+  return null;
+}
+
+/** Weekdays the serving reparto visits: one option per weekday, in week order. */
+function optionsForReparto(neighbors: WsNeighbor[], repartoId: number): DeliveryOption[] {
+  const byWeekday = new Map<string, DeliveryOption>();
   for (const n of neighbors) {
     for (const v of n.visitas) {
+      if (v.reparto_id !== repartoId) continue;
       const weekday = v.dia.toLowerCase();
-      const key = `${v.reparto_id}:${weekday}`;
-      if (byKey.has(key)) continue;
+      if (byWeekday.has(weekday)) continue;
       const hourMin = hourOf(v.ultimasVisitas?.horarioMin);
       const hourMax = hourOf(v.ultimasVisitas?.horarioMax);
-      byKey.set(key, {
+      byWeekday.set(weekday, {
         reparto_id: v.reparto_id,
         route: v.nombreReparto ?? String(v.reparto_id),
         weekday,
@@ -32,7 +49,11 @@ function optionsFromNeighbors(neighbors: WsNeighbor[]): DeliveryOption[] {
       });
     }
   }
-  return [...byKey.values()];
+  const rank = (w: string) => {
+    const i = WEEKDAY_ORDER.indexOf(w);
+    return i === -1 ? WEEKDAY_ORDER.length : i;
+  };
+  return [...byWeekday.values()].sort((a, b) => rank(a.weekday) - rank(b.weekday));
 }
 
 function resultFromNeighbors(
@@ -50,13 +71,14 @@ function resultFromNeighbors(
   }
   const sorted = [...neighbors].sort((a, b) => a.distanciaMetros - b.distanciaMetros);
   const nearest = sorted[0]!;
+  const repartoId = servingRepartoId(sorted);
   return {
     covered: true,
     coordinates:
       coordinates ?? { lat: nearest.latitud, lng: nearest.longitud },
-    // Location-based price list from the nearest neighbors (01 §4.1).
+    // Location-based price list from the nearest neighbor (01 §4.1).
     price_list: String(nearest.listaDePrecios_id),
-    delivery_options: optionsFromNeighbors(sorted),
+    delivery_options: repartoId === null ? [] : optionsForReparto(sorted, repartoId),
     nearest_client_id: nearest.cliente_id,
   };
 }

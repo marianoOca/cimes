@@ -144,6 +144,8 @@ Lookup via #2 (by phone) / #8 (by id). If recognized, the AI answers account/ser
 
 This is the single pipeline behind order confirmation from **every** source. It MUST be **idempotent per lead** (guardrail §13) and land the full result with **zero operator input**.
 
+**No structured order is sent to WaterService — by design (settled, confirmed with the client).** The WaterService *chatbot* API (manual v1.0.1) has **no order / pedido / venta / abono creation endpoint** — its only writes are #6 (alta), #7 (contact), #3 (incident/ticket), and #20 (MercadoPago link). So the order travels as the **#3 ticket's `descripcion` note** (product summary, time window, amount to collect); CIMES staff/route then convert that note into the real pedido/venta *inside* WaterService. Do **not** look for an order endpoint or re-litigate this. **Scope boundary:** our responsibility ends when that note reaches WaterService correctly and completely — the send succeeding (dispatch cron running + verified live) and the note carrying the right fields are ours; everything downstream of the note is CIMES's.
+
 1. **Dedupe / existing-client check.** Before creating a client, look up an existing WaterService client by phone via **#2**. If found, reuse its `cliente_id` — do not create a duplicate alta.
 2. **Create client — #6** (`CrearNuevoClientePorChatBot`) using `reparto_id`, `listaDePreciosId`, and lat/lng **from the coverage (#12) result** → `cliente_id` (client created in `Borrador`). Store on the lead record as `waterservice_client_id`.
 3. **Attach contact — #7** (`CreateContacto`): the WhatsApp number, `tipoContacto_ids:1`, `sector_ids:6`.
@@ -261,6 +263,21 @@ Request:  { city: string, address: string, cross_streets?: string }
 }
 ```
 Emits a `coverage_checked` event.
+
+**How it resolves (end-to-end call chain).** The runtime path from the browser to WaterService:
+
+1. The browser (website wizard **step 4**) POSTs here — it **never calls WaterService directly**. The whole coverage decision is server-side.
+2. This endpoint runs `GeocodingProvider.resolve(address, COVERAGE_RADIUS_M)` (§3).
+3. Default provider → WaterService endpoint **#12** (`BusquedaClientesCercanosResultJson`), one authenticated GET (token cached as `CURRENTTOKENVALUE`, re-login on expiry). It geocodes the address *and* returns nearby existing clients ("neighbors") in a single call.
+4. Mapping in `providers/geocoding.ts`:
+   - `covered` = at least one neighbor within the radius.
+   - `delivery_options` = every neighbor's `visitas`, deduped by `reparto_id + weekday` → `{ route, weekday, time_window }` (window built from `horarioMin/horarioMax`).
+   - `price_list` = the **nearest** neighbor's `listaDePrecios_id` (distance-sorted).
+   - `coordinates` = the geocoded point (falls back to the nearest neighbor's).
+
+Everything here is **deterministic — the AI never decides coverage, delivery days, or price** (`00-master §6`); those come only from #12. Google Maps adapter path (`GEOCODING_PROVIDER=googlemaps`): geocode to coordinates, then coverage via **#4** by coordinates instead (§3).
+
+**Time window provenance.** `time_window` comes only from the neighbor's `ultimasVisitas` hours (`horarioMin`/`horarioMax`); if those are absent, the copy is **"en horario a confirmar"** — a window is **never invented or defaulted to a fixed slot**. `ultimasVisitas` is WaterService's rolling **last-N-visits** aggregate (≈11 observed in live data — count-based, not a calendar window), so the window is a **historical envelope of real arrival times, not a promised slot**, and can be wide (e.g. `11:39`–`17:10`). Delivery options are scoped to the **serving reparto** (nearest neighbor's route), deduped one-per-weekday — not every route in radius (that produced dozens of redundant options and could mis-assign the reparto on alta).
 
 ### `POST /api/orders`
 Body: the full order. Runs the **order confirmation pipeline (§4.5)**: #6 client + #7 contact + #3 driver ticket (dispatched day-before by the scheduler) + orders-sheet row + label `cliente_cerrado`. **Idempotent per lead** (dedupe by phone via #2; safe to retry).
