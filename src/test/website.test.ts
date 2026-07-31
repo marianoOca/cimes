@@ -105,6 +105,7 @@ describe("website: Flow B wizard", () => {
         waitlists.push(JSON.parse(String(init?.body)));
         return Promise.resolve({ ok: true });
       }
+      if (url.includes("/api/manual-review")) return Promise.resolve({ ok: true });
       if (url.includes("/api/orders")) {
         orders.push(JSON.parse(String(init?.body)));
         return Promise.resolve({ order_id: "o1", sync_status: "synced" });
@@ -423,7 +424,7 @@ describe("website: Flow B wizard", () => {
     expect(orders).toHaveLength(0);
   });
 
-  it("shows the polite no-coverage message on covered:false", async () => {
+  it("hands off to WhatsApp manual review when a covered city has no offerable time", async () => {
     const dom = await bootToProduct(stub({ covered: false, coordinates: null, price_list: null, delivery_options: [] }));
     pickProduct(dom);
     type(dom, "firstName", "Ana");
@@ -432,9 +433,11 @@ describe("website: Flow B wizard", () => {
     type(dom, "direccion", "Lejana 1");
     click(dom, "#data-next");
     await tick();
-    expect(dom.window.document.querySelector("#wizard-root")!.textContent).toContain(
-      "No encontramos reparto",
-    );
+    const root = dom.window.document.querySelector("#wizard-root")!;
+    expect(root.textContent).toContain("Estás en nuestra zona"); // manual-review copy, not a dead end
+    const wa = root.querySelector('a[data-wa-loc="manual_review"]') as HTMLAnchorElement | null;
+    expect(wa).not.toBeNull();
+    expect(decodeURIComponent(wa!.href)).toContain("[REV-COB]"); // sentinel in the deep link
   });
 
   it("'Otra ciudad' links to the waitlist form", () => {

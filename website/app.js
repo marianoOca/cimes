@@ -838,9 +838,35 @@
         return;
       }
       if (!state.coverage.covered || state.coverage.delivery_options.length === 0) {
-        // Polite no-coverage path (04 §5); the backend records/labels the lead.
-        track("no_coverage", { stage: "address" });
-        root.innerHTML = `<p class="status-msg">${W.noCoverage.address}</p>` + deadEndActions("data");
+        // Covered city, but no delivery time we can offer → save the lead server-side and
+        // hand off to a human via WhatsApp (04 §5). AI stays silent for this lead.
+        track("manual_review", { stage: "address" });
+        const waHrefReview =
+          "https://wa.me/" +
+          CFG.WHATSAPP_NUMBER_SALES +
+          "?text=" +
+          encodeURIComponent(W.manualReview.waText);
+        // Best-effort capture; the human channel is WhatsApp regardless of this call.
+        fetch(`${API}/api/manual-review`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source: "web",
+            name: `${state.data.firstName} ${state.data.lastName}`,
+            phone: state.data.phone,
+            city: state.city,
+            address: addressString(state.data),
+            cross_streets: state.data.crossStreets,
+            items: state.cart.map((c) => ({ product: c.name, qty: c.qty })),
+            ...attribution,
+          }),
+        }).catch(() => {});
+        root.innerHTML =
+          progress(4) +
+          `<h3>${W.manualReview.title}</h3>` +
+          `<p class="status-msg">${W.manualReview.message}</p>` +
+          `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
+          `<a class="btn btn-whatsapp" data-wa-loc="manual_review" target="_blank" rel="noopener" href="${waHrefReview}">${W.manualReview.button}</a></div>`;
         bindBack();
         return;
       }

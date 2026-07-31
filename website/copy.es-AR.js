@@ -150,6 +150,18 @@ window.CIMES_COPY = {
       checking: "Verificando cobertura…",
       optionLabel: (route, weekday, window) => `Reparto ${route} · ${weekday} ${window}`,
     },
+    // Covered city, but no delivery time we can offer (no serviceable route). Hand off to
+    // a human via WhatsApp; the lead is already saved server-side (POST /api/manual-review).
+    manualReview: {
+      title: "¡Estás en nuestra zona!",
+      message:
+        "Para coordinar el día de entrega escribinos por WhatsApp! 👇",
+      button: "Coordinar por WhatsApp",
+      // The [REV-COB] tag lets the backend recognize the case and keep the AI silent so a
+      // human replies (mirror of MANUAL_REVIEW_TAG in src/engine/manual-review.ts).
+      waText:
+        "Hola! Me registré en la web y quiero coordinar la entrega en mi zona! [REV-COB]",
+    },
     summaryStep: {
       title: "Confirmá tu pedido",
       product: "Producto",

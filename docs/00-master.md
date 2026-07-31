@@ -163,6 +163,7 @@ Two dimensions, shown together in the CRM and the sheet.
 | `mal_lead` | Operator-defined bad zone / unreachable address |
 | `otra_ciudad` | City outside coverage |
 | `derivado` | Human handoff triggered |
+| `revision_cobertura` | **Covered city, but no delivery time we can offer** (no serviceable neighbor/route). Auto-applied by the manual-review handoff (`01 §4.5`): AI off, mirrored to Chatwoot for a human to decide "we can take you" / "we can't". Distinct from `mal_lead` (rejected) — this is *pending a human decision* |
 
 **Dynamic stage label**, format `{stage}:{followup_count}` (e.g. `datos_entrega:2` = stuck at delivery-data, 2 follow-ups sent). `{stage}` is one of the signup stages (§5.4). Powers the funnel view.
 

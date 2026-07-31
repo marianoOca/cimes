@@ -65,6 +65,15 @@ export const copy = {
     `⚠️ Diferencia de precios entre la planilla y WaterService: ${detail}`,
   operatorNewZoneAlert: (phone: string, address: string): string =>
     `📍 Lead sin cobertura para revisar: ${phone} — ${address}`,
+  operatorManualReviewAlert: (
+    phone: string,
+    city: string,
+    address: string,
+    link: string,
+  ): string =>
+    `🔔 Revisar cobertura manual: ${phone} — ${city}, ${address}. Zona con cobertura pero sin horario para ofrecer. Chatwoot: ${link}`,
+  manualReviewNote: (items: string, address: string, crossStreets: string): string =>
+    `Lead en ciudad con cobertura pero sin ruta/horario para ofrecer → decisión manual. Pedido: ${items}. Dirección: ${address}${crossStreets ? `. Entre calles: ${crossStreets}` : ""}.`,
   webConfirmation: (day: string, window: string): string =>
     `¡Pedido confirmado! 🎉 Te lo llevamos el ${day} ${window}. Cualquier cosa escribinos por acá.`,
 } as const;

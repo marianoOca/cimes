@@ -18,6 +18,7 @@ import type { NormalizedInbound } from "../kapso/webhook.js";
 import { runAiTurn } from "../ai/agent.js";
 import { getPriceProvider } from "../ai/tools.js";
 import { COVERED_CITIES, isCoveredCity, runCoverageForLead } from "./coverage.js";
+import { enterManualReview, MANUAL_REVIEW_TAG } from "./manual-review.js";
 import { enqueueForLead } from "./leadQueue.js";
 import { onLeadReply, scheduleFollowups } from "../engines/followups.js";
 import { confirmOrder } from "../pipeline/orders.js";
@@ -258,7 +259,10 @@ async function handleDeliveryData(
 
   const coverage = await runCoverageForLead(db, lead, lead.address);
   lead = updateLead(db, leadId, { coverage_json: JSON.stringify(coverage) });
-  if (!coverage.covered) {
+  // Covered city but no offerable delivery time (no serviceable neighbor/route) → hand to
+  // a human instead of dead-ending (01 §4.5 / 04-website §5).
+  if (coverage.delivery_options.length === 0) {
+    await enterManualReview(db, lead);
     await reply(lead, phoneNumberId, db, copy.coverageNegativeInCity);
     return;
   }
@@ -348,6 +352,14 @@ async function processInbound(db: DB, msg: NormalizedInbound): Promise<void> {
       stage: lead.stage,
       metadata: { label: "interesado", reason: "exchanges" },
     });
+  }
+
+  // Website manual-review deep link: the sentinel in the prefilled WhatsApp text hands the
+  // lead to a human, covering a web-phone ≠ WhatsApp-phone mismatch (phone-match miss).
+  if (lead.ai_enabled && msg.kind === "text" && (msg.content ?? "").includes(MANUAL_REVIEW_TAG)) {
+    await enterManualReview(db, lead);
+    await reply(lead, msg.phoneNumberId, db, copy.coverageNegativeInCity);
+    return;
   }
 
   try {

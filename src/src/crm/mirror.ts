@@ -59,10 +59,11 @@ export async function handleMirrorMessageJob(
   const lead = getLeadById(db, String(payload.lead_id));
   if (!lead) return;
   const convId = await ensureConversation(db, lead);
+  const isPrivate = Boolean(payload.private);
   await api(`/conversations/${convId}/messages`, "POST", {
     content: String(payload.content),
-    message_type: payload.direction === "in" ? "incoming" : "outgoing",
-    private: false,
+    message_type: isPrivate || payload.direction === "out" ? "outgoing" : "incoming",
+    private: isPrivate,
   });
 }
 
@@ -131,6 +132,16 @@ export function mirrorLeadSync(db: DB, lead: Lead): void {
     { lead_id: lead.lead_id },
     `mirror_sync:${lead.lead_id}`,
   );
+}
+
+/** Post an internal (private) note on the lead's Chatwoot conversation for the operator. */
+export function mirrorPrivateNote(db: DB, lead: Lead, content: string): void {
+  if (!chatwootConfigured()) return;
+  enqueue(db, "chatwoot_mirror_message", new Date(), {
+    lead_id: lead.lead_id,
+    private: true,
+    content,
+  });
 }
 
 /** Handoff flips the Chatwoot conversation to open (01 §5). */

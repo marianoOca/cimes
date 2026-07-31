@@ -37,6 +37,18 @@ auth + mapping all work.
   that note lands. **Next real step:** one live end-to-end alta+contact+ticket with a disposable
   test client, then delete it. Also confirm the dispatch cron is deployed/running.
 
+**Manual-review handoff — covered city, no delivery time (2026-07-30).** New `revision_cobertura`
+flow: a covered-city address with **zero offerable delivery times** (no serviceable neighbor/route)
+is saved + handed to a human instead of dead-ending. Shared `engine/manual-review.ts`
+(`enterManualReview`): AI off (`ai_enabled=false`), label `revision_cobertura`, Chatwoot conversation
+`open` + private note, operator ping; idempotent. Wired into: website (`POST /api/manual-review`,
+friendly copy + WhatsApp button with the `[REV-COB]` deep-link), the WhatsApp bot coverage step
+(replaces the old in-city `mal_lead` dead-end), and an inbound sentinel fallback. AI silence is by
+phone-match; the sentinel covers a web-phone ≠ WhatsApp-phone mismatch. Docs updated (00-master §5.3,
+01-core-api §9 + §4.5, 04-website §5). typecheck clean, **75 tests** (added `manual-review.test.ts`;
+updated the website no-coverage test). Design confirmed with Mariano: trigger = supported city +
+zero times; persist auto on fail; AI-off via phone-match; new label blessed into the taxonomy.
+
 ## Last session (2026-07-19)
 
 **Done:**

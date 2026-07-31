@@ -15,6 +15,7 @@ import { sendText } from "../kapso/send.js";
 import { confirmOrder, maybeSendWebConfirmation } from "../pipeline/orders.js";
 import { handleInstagramLead, verifyMetaSignature } from "./instagram.js";
 import { recordWaitlistLead } from "./waitlist.js";
+import { recordManualReviewLead } from "./manual-review.js";
 import { resolveCartLines } from "./orders-cart.js";
 
 declare module "fastify" {
@@ -103,6 +104,52 @@ export function buildServer(db: DB): FastifyInstance {
       phone: body.phone,
       city: body.city,
       comment: body.comment,
+      attribution: {
+        utm_source: body.utm_source,
+        utm_medium: body.utm_medium,
+        utm_campaign: body.utm_campaign,
+        utm_content: body.utm_content,
+        utm_term: body.utm_term,
+        fbclid: body.fbclid,
+        gclid: body.gclid,
+      },
+    });
+    return { ok: true };
+  });
+
+  // Covered-city / no-delivery-time capture (04-website §5): the website calls this when
+  // /api/coverage comes back with zero offerable times in a covered city. Saves the lead
+  // and hands it to a human (AI off, `revision_cobertura`, Chatwoot + operator ping).
+  app.post("/api/manual-review", async (req, reply) => {
+    const body = z
+      .object({
+        source: z.literal("web").default("web"),
+        name: z.string().min(1),
+        phone: z.string().min(5),
+        city: z.string().min(1),
+        address: z.string().min(1),
+        cross_streets: z.string().optional(),
+        items: z
+          .array(z.object({ product: z.string().min(1), qty: z.number().int().positive() }))
+          .min(1),
+        utm_source: z.string().optional(),
+        utm_medium: z.string().optional(),
+        utm_campaign: z.string().optional(),
+        utm_content: z.string().optional(),
+        utm_term: z.string().optional(),
+        fbclid: z.string().optional(),
+        gclid: z.string().optional(),
+      })
+      .parse(req.body);
+    // Out-of-city belongs on the waitlist path, not here.
+    if (!isCoveredCity(body.city)) return reply.code(422).send({ error: "city_not_covered" });
+    await recordManualReviewLead(db, {
+      name: body.name,
+      phone: body.phone,
+      city: body.city,
+      address: body.address,
+      cross_streets: body.cross_streets,
+      items: body.items,
       attribution: {
         utm_source: body.utm_source,
         utm_medium: body.utm_medium,

@@ -312,6 +312,20 @@ Request:  {
 ```
 Emits `lead_created` (only when the lead is new). No new label/event type — `otra_ciudad` and `lead_created` are the canonical existing values.
 
+### `POST /api/manual-review`
+Covered-city / **no-delivery-time** capture (04-website §5). The website calls this at wizard step 4 when `/api/coverage` returns **zero offerable times in a covered city** (`covered:false`, or `covered:true` with empty `delivery_options`). Create/update the lead by phone, store name/address/cross-streets and a summarized `product` (`"2x A, 1x B"` from `items`), queue a lead-only sheet row (dedupe `sheet_manual_review:<lead_id>`), then run the shared **`enterManualReview`** step. Rejects out-of-city with `422 city_not_covered` (that belongs on `/api/waitlist`). Idempotent per phone.
+```
+Request:  {
+  source: "web",
+  name, phone, city, address, cross_streets?,
+  items: [{ product, qty }],
+  utm_source?, utm_medium?, ...            // same attribution block as /api/waitlist
+}
+200 →     { ok: true }
+```
+
+**`enterManualReview(lead)` (shared closer, `engine/manual-review.ts`).** Sets `ai_enabled = false`, applies label **`revision_cobertura`** (`00-master §5.3`), mirrors to Chatwoot (conversation → `open` + a private note with the case detail) and pings `OPERATOR_PHONE`. Emits a `handoff` event (`{reason:"no_delivery_time"}`). **Idempotent** — re-running only re-syncs the CRM; it does not re-alert. Called from three places: this endpoint (website), the **WhatsApp bot** coverage step when it yields zero delivery options (`§4.5` — replaces the old in-city `mal_lead` dead-end), and the **inbound sentinel** fallback: a WhatsApp message containing **`[REV-COB]`** (the tag in the website's deep-link prefill, `MANUAL_REVIEW_TAG`) on an AI-on lead hands it off — covering the case where the customer's WhatsApp number differs from the one entered on the web. AI silence itself is guaranteed by `ai_enabled = false` keyed by phone (the inbound engine mirrors the message, then returns without replying).
+
 ### `GET /api/export/events?from=&to=`
 Operator-triggered CSV export of the `events` table (§10.1) over a date range, **in order**. `from`/`to` are dates. Returns `text/csv` with all rows in the range in chronological order.
 

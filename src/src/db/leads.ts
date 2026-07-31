@@ -27,7 +27,8 @@ export type TerminalLabel =
   | "pedido_cerrado"
   | "mal_lead"
   | "otra_ciudad"
-  | "derivado";
+  | "derivado"
+  | "revision_cobertura";
 
 export interface Lead {
   lead_id: string;
@@ -167,6 +168,7 @@ export function hasTerminalLabel(lead: Lead): boolean {
     "mal_lead",
     "otra_ciudad",
     "derivado",
+    "revision_cobertura",
   ];
   return lead.labels.some((l) => terminals.includes(l));
 }
