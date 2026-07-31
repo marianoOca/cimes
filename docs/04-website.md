@@ -138,6 +138,16 @@ Per `00-master.md` §2, all user-facing copy is **Argentine Spanish (voseo)** an
 - **Deployable to Hostinger shared hosting.** Output must be plain static files uploadable to the client's existing Hostinger. No Node runtime, no server-side rendering at request time.
 - **Keep the existing GTM container.** Preserve the client's current Google Tag Manager container on the new site.
 
+### Address autocomplete (Google Places)
+
+The Dirección field (step 3) uses Google Places for suggestions but **must never be a hard dependency** — a plain typed address always works, because the backend geocodes the raw string via WaterService #12 (`01-core-api.md` §3). Three constraints below — each is the fix for a real regression that shipped and broke this field. **Do not undo them.**
+
+1. **Load Maps at the *product* step (step 2) — not lazily at the address step, not eagerly at page load.** Triggering the loader on step 3 *races the field render*: the Maps script loads async, and by the time it's ready the render has moved on, so the input is left **unbound** (no dropdown, no error, no network call — the exact symptom to watch for). Loading eagerly at page init wastes the payload on landing-page bouncers. Step 2 loads it one step early → ready by step 3 → `attachPlaces()` binds **synchronously** when the field renders → and on the landing page it only loads once the visitor engages the wizard.
+2. **Use the new `google.maps.places.AutocompleteSuggestion` API — not the legacy `Autocomplete` widget.** Legacy is deprecated and **blocked for Google Cloud projects created after 2025-03-01**; it silently fails to bind. Render our own dropdown on the existing `#direccion` input (that also keeps freeform typing working).
+3. **Restrict, don't just bias.** Use `locationRestriction` (a ~20 km box around the selected city's geocoded center) so streets from *other* cities never appear. `locationBias` only re-ranks and still surfaces far-away results. Fall back to country-only (`includedRegionCodes: ['ar']`) if the city geocode fails.
+
+The browser needs its **own** Maps key — see `GOOGLE_MAPS_KEY` in §9.
+
 ### SEO
 
 - **Per-page meta + Open Graph tags** (title, description, OG title/description/image) on every page.
@@ -154,6 +164,7 @@ Full ownership table is `00-master.md` §8. This module's relevant subset:
 | Var | Default | Owner | Website's use |
 |---|---|---|---|
 | `API_BASE_URL` | — | **website** | Backend base URL the static site `fetch`es for `GET /api/prices`, `POST /api/coverage`, `POST /api/orders` (§4). |
+| `GOOGLE_MAPS_KEY` | placeholder `"GOOGLE_MAPS_KEY"` | **website** | Browser Maps key for the step-3 address autocomplete. Needs **Maps JavaScript API + Places API (New)** enabled and **HTTP-referrer-restricted** to the site's domain. **Separate from the backend's server-side `GOOGLE_MAPS_API_KEY`** — never put the server key here (it would be publicly exposed). While the value is the placeholder, the field stays a plain text input (autocomplete no-ops). Local dev injects the backend key via `dev.sh` (`MAPS_KEY`). |
 | `WHATSAPP_NUMBER_SALES` | — | chatbot | The sales number baked into the "Alta por WhatsApp" `wa.me` deep links (§2.2, §2.5). Website consumes the value; it does not own it. |
 | `WEB_CONFIRMATION_TEMPLATE` | `false` | core-api | Gates the optional web-order confirmation template. **Owned by core-api, sent via the chatbot layer** — website has no direct role (§6). Listed here only so the flag's existence and ownership are clear. |
 

@@ -592,12 +592,16 @@ main > section h2::after {
 
 /* ---------- Google Places autocomplete dropdown ---------- */
 /* Attached to the Direccion input on /alta; must float above the wizard card. */
+.field.pac-anchor { position: relative; }
 .pac-container {
-  z-index: 10000; margin-top: 4px;
+  position: absolute; left: 0; right: 0; top: 100%;
+  z-index: 10000; margin: 4px 0 0; padding: 0; list-style: none;
+  max-height: 260px; overflow-y: auto;
   border: 1px solid var(--celeste-100); border-radius: var(--radius);
   box-shadow: var(--shadow-celeste); background: #fff;
   font-family: var(--font-body);
 }
+.pac-container[hidden] { display: none; }
 .pac-item { padding: 0.5rem 0.75rem; font-size: 0.95rem; color: var(--body); cursor: pointer; border-top: 1px solid var(--celeste-050); }
 .pac-item:first-child { border-top: none; }
 .pac-item:hover, .pac-item-selected { background: var(--celeste-050); }

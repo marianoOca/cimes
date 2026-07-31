@@ -49,6 +49,16 @@ phone-match; the sentinel covers a web-phone ≠ WhatsApp-phone mismatch. Docs u
 updated the website no-coverage test). Design confirmed with Mariano: trigger = supported city +
 zero times; persist auto on fail; AI-off via phone-match; new label blessed into the taxonomy.
 
+**Website address-autocomplete fixed (2026-07-31).** The Dirección field (step 3) stopped
+suggesting. Root cause: commit `c42f985` changed the Google Maps loader from eager to a lazy
+per-step call that **raced the field render**, leaving `#direccion` unbound (no dropdown, no error,
+no network call). Fixes (`website/app.js` + `styles.css`, working-tree): (1) load Maps at the
+**product step (step 2)** — ready by step 3, off the landing-page first paint; (2) migrated the
+deprecated legacy `places.Autocomplete` → new **`AutocompleteSuggestion`** API with our own dropdown
+(keeps freeform typing); (3) restored the ~20 km city restriction via **`locationRestriction`**
+(not `locationBias`). Google key verified valid (Places + Places New enabled) — never the problem.
+Captured as a do-not-repeat note in `docs/04-website §8` + a `GOOGLE_MAPS_KEY` row in §9.
+
 ## Last session (2026-07-19)
 
 **Done:**

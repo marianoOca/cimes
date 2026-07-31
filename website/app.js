@@ -490,52 +490,113 @@
   // Google Places autocomplete on the address field. No-op when Maps is absent
   // (jsdom tests, or a webview where the script didn't load): the field stays a
   // plain text input the user can type into.
-  function attachPlaces() {
+  // Address autocomplete on the #direccion input, via the NEW Places API
+  // (AutocompleteSuggestion) rendered as our own dropdown. The legacy
+  // places.Autocomplete widget is deprecated (blocked for new Google projects) and
+  // its .pac-container never bound reliably here. We keep #direccion as the real
+  // input so FREEFORM addresses still submit (the backend geocodes the raw string
+  // via WaterService #12); on picking a suggestion we write back the same
+  // "route street_number" line + lat/lng dataset as before. Idempotent per input
+  // element (data-pacBound), so it re-binds correctly on every data-step re-render.
+  async function attachPlaces() {
     const input = document.getElementById("direccion");
-    if (!input || !(window.google && window.google.maps && window.google.maps.places)) return;
-    const ac = new window.google.maps.places.Autocomplete(input, {
-      componentRestrictions: { country: "ar" },
-      fields: ["address_components", "formatted_address", "geometry"],
-      types: ["address"],
-    });
-    // Restrict suggestions to a radius around the selected city's center, not the
-    // city's exact viewport. Two reasons: (1) it includes the outskirts — people
-    // who consider themselves "in" the city but live just outside it still get
-    // matches; (2) the box is generous enough that strictBounds works here without
-    // the empty-dropdown problem a tight town viewport causes. Google's
-    // componentRestrictions only filters by country, so this radius box is how we
-    // exclude other cities. Best-effort: if the geocode fails or Geocoder is
-    // absent, we fall back to country-only — the backend coverage check (step 4)
-    // is the authority on the address anyway.
-    const CITY_RADIUS_M = 20000; // ~20 km: covers outskirts, excludes neighbouring cities
+    const places = window.google && window.google.maps && window.google.maps.places;
+    if (!input || !places || !places.AutocompleteSuggestion) return;
+    if (input.dataset.pacBound) return;
+    input.dataset.pacBound = "1";
+    input.setAttribute("autocomplete", "off");
+
+    const wrap = input.closest(".field") || input.parentElement;
+    if (wrap) wrap.classList.add("pac-anchor");
+    const box = document.createElement("ul");
+    box.className = "pac-container";
+    box.setAttribute("role", "listbox");
+    box.hidden = true;
+    (wrap || input.parentElement).appendChild(box);
+
+    const { AutocompleteSuggestion, AutocompleteSessionToken } = places;
+    let token = new AutocompleteSessionToken();
+
+    // Hard-restrict suggestions to a ~20 km box around the selected city (the old
+    // strictBounds behavior) so streets from other cities don't show. Falls back to
+    // country-only if the city geocode fails; the backend coverage check is the
+    // authority on the address anyway.
+    let restrict = null;
     if (state.city && window.google.maps.Geocoder) {
-      new window.google.maps.Geocoder().geocode(
-        { address: state.city + ", Provincia de Buenos Aires, Argentina" },
-        (results, status) => {
-          const c = status === "OK" && results[0] && results[0].geometry && results[0].geometry.location;
-          if (!c) return;
+      try {
+        const r = await new window.google.maps.Geocoder().geocode({
+          address: state.city + ", Provincia de Buenos Aires, Argentina",
+        });
+        const c = r.results && r.results[0] && r.results[0].geometry && r.results[0].geometry.location;
+        if (c) {
           const lat = c.lat();
           const lng = c.lng();
-          const dLat = CITY_RADIUS_M / 111320;
-          const dLng = CITY_RADIUS_M / (111320 * Math.cos((lat * Math.PI) / 180));
-          ac.setBounds({ south: lat - dLat, west: lng - dLng, north: lat + dLat, east: lng + dLng });
-          ac.setOptions({ strictBounds: true });
-        },
-      );
+          const dLat = 20000 / 111320;
+          const dLng = 20000 / (111320 * Math.cos((lat * Math.PI) / 180));
+          restrict = { north: lat + dLat, south: lat - dLat, east: lng + dLng, west: lng - dLng };
+        }
+      } catch (e) { /* fall back to country-only */ }
     }
-    ac.addListener("place_changed", () => {
-      const place = ac.getPlace();
+
+    const close = () => { box.hidden = true; box.innerHTML = ""; };
+
+    async function choose(pred) {
+      const place = pred.toPlace();
+      try {
+        await place.fetchFields({ fields: ["addressComponents", "location", "formattedAddress"] });
+      } catch (e) { /* keep whatever the user typed */ }
       const comp = {};
-      (place.address_components || []).forEach((c) =>
-        c.types.forEach((t) => { comp[t] = c.long_name; }),
+      (place.addressComponents || []).forEach((c) =>
+        (c.types || []).forEach((t) => { comp[t] = c.longText; }),
       );
       const line = [comp.route, comp.street_number].filter(Boolean).join(" ");
-      if (line) input.value = line;
-      if (place.geometry && place.geometry.location) {
-        input.dataset.lat = place.geometry.location.lat();
-        input.dataset.lng = place.geometry.location.lng();
+      input.value = line || place.formattedAddress || input.value;
+      if (place.location) {
+        input.dataset.lat = place.location.lat();
+        input.dataset.lng = place.location.lng();
       }
+      token = new AutocompleteSessionToken(); // end the billing session after a pick
+      close();
+    }
+
+    let seq = 0;
+    async function run(text) {
+      const mine = ++seq;
+      if (!text || text.trim().length < 3) return close();
+      const req = {
+        input: text, includedRegionCodes: ["ar"], language: "es", region: "AR", sessionToken: token,
+      };
+      if (restrict) req.locationRestriction = restrict;
+      let res;
+      try {
+        res = await AutocompleteSuggestion.fetchAutocompleteSuggestions(req);
+      } catch (e) { return close(); }
+      if (mine !== seq) return; // a newer keystroke already superseded this
+      const preds = (res.suggestions || []).map((s) => s.placePrediction).filter(Boolean);
+      if (!preds.length) return close();
+      box.innerHTML = "";
+      preds.slice(0, 5).forEach((p) => {
+        const li = document.createElement("li");
+        li.className = "pac-item";
+        li.setAttribute("role", "option");
+        li.textContent = p.text && p.text.text ? p.text.text : "";
+        // mousedown (not click) so it fires before the input's blur closes the box.
+        li.addEventListener("mousedown", (ev) => { ev.preventDefault(); choose(p); });
+        box.appendChild(li);
+      });
+      box.hidden = false;
+    }
+
+    let debounce;
+    input.addEventListener("input", () => {
+      delete input.dataset.lat;
+      delete input.dataset.lng; // typing invalidates a previously-picked coordinate
+      clearTimeout(debounce);
+      const text = input.value;
+      debounce = setTimeout(() => run(text), 200);
     });
+    input.addEventListener("blur", () => setTimeout(close, 150));
+    input.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
   }
 
   // Numbered stepper (rosmino-style). Falls back to a plain label if steps are
@@ -670,6 +731,12 @@
     // 2. Priced catalog for the selected city (rendered as returned).
     async product() {
       track("wizard_step", { step: "product", n: 2 });
+      // Start loading Google Maps here — one step before the address field needs it. On
+      // /alta this is the first render (loads on arrival); on the landing page it only
+      // fires once the visitor engages the wizard, keeping first paint light for bouncers.
+      // By the time step 3 renders, the Places API is ready and attachPlaces() binds
+      // synchronously (no race). Guarded by mapsRequested, so it loads at most once.
+      loadGoogleMaps();
       root.innerHTML = progress(2) + `<h3>${W.productStep.title}</h3><p class="status-msg">${W.productStep.loading}</p>`;
       try {
         const res = await fetch(`${API}/api/prices?city=${encodeURIComponent(state.city)}`);
