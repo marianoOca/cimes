@@ -632,6 +632,82 @@
     );
   }
 
+  // Canister loader (04 §5): water waves inside a spinning bidón (shape mirrors the
+  // botellon-12l product photo). Water is clipped to the body path and spins together
+  // with the outline, so it stays centred and fully inside — never spills past the glass.
+  // Purely decorative; motion off under prefers-reduced-motion.
+  function canisterAnim() {
+    // Body silhouette, proportioned from the botellon-12l photo (width 10 : side 8.5 :
+    // total 13.5 : neck 2.8). A squat bidón — total height only ~1.35× the width. Shared
+    // by the clip and the outline.
+    const body =
+      "M48,37 H72 V44 Q94,47 95,55 V113 Q95,120 82,120 H38 Q25,120 25,113 V55 Q26,47 48,44 Z";
+    return (
+      `<div class="coverage-anim" aria-hidden="true">` +
+      `<svg viewBox="10 12 100 120" class="canister">` +
+      `<defs><clipPath id="bidonBody"><path d="${body}"/></clipPath></defs>` +
+      `<g class="canister-spin">` +
+      // water layer — waves, clipped to the body so it only shows inside the glass. The clip
+      // rotates with the bottle (water always contained), but can-water counter-rotates so the
+      // surface stays level while the glass spins around it.
+      `<g clip-path="url(#bidonBody)">` +
+      `<g class="can-water">` +
+      `<path class="can-wave can-wave-back" d="M-30,65 q15,-6 30,0 t30,0 t30,0 t30,0 t30,0 t30,0 V150 H-30 Z"/>` +
+      `<path class="can-wave can-wave-front" d="M-30,69 q15,-7 30,0 t30,0 t30,0 t30,0 t30,0 t30,0 V150 H-30 Z"/>` +
+      `</g>` +
+      `</g>` +
+      // grey cap + blue outline on top; the whole group shares the body's centre.
+      `<rect class="can-cap" x="46" y="24" width="28" height="14" rx="3"/>` +
+      `<path class="can-shell" d="${body}"/>` +
+      `</g>` +
+      `</svg></div>`
+    );
+  }
+
+  // Shared canister loader panel for backend/data waits (prices, coverage). Not used for
+  // quick button submits ("Enviando…"), which stay as button-label swaps.
+  function loadingPanel(msg) {
+    return canisterAnim() + `<p class="status-msg">${msg}</p>`;
+  }
+
+  function coverageLoading() {
+    return progress(4) + `<h3>${W.dayStep.title}</h3>` + loadingPanel(W.dayStep.checking);
+  }
+
+  // Covered city, but nothing we can offer automatically (no serviceable slot, or the
+  // coverage check kept failing) → save the lead server-side and hand off to a human via
+  // WhatsApp (04 §5). Capture fires on render, exactly when the WhatsApp button appears.
+  function enterManualReview() {
+    track("manual_review", { stage: "address" });
+    const waHrefReview =
+      "https://wa.me/" +
+      CFG.WHATSAPP_NUMBER_SALES +
+      "?text=" +
+      encodeURIComponent(W.manualReview.waText);
+    // Best-effort capture; the human channel is WhatsApp regardless of this call.
+    fetch(`${API}/api/manual-review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "web",
+        name: `${state.data.firstName} ${state.data.lastName}`,
+        phone: state.data.phone,
+        city: state.city,
+        address: addressString(state.data),
+        cross_streets: state.data.crossStreets,
+        items: state.cart.map((c) => ({ product: c.name, qty: c.qty })),
+        ...attribution,
+      }),
+    }).catch(() => {});
+    root.innerHTML =
+      progress(4) +
+      `<h3>${W.manualReview.title}</h3>` +
+      `<p class="status-msg">${W.manualReview.message}</p>` +
+      `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
+      `<a class="btn btn-whatsapp" data-wa-loc="manual_review" target="_blank" rel="noopener" href="${waHrefReview}">${W.manualReview.button}</a></div>`;
+    bindBack();
+  }
+
   const steps = {
     // 1. City select.
     city() {
@@ -737,7 +813,7 @@
       // By the time step 3 renders, the Places API is ready and attachPlaces() binds
       // synchronously (no race). Guarded by mapsRequested, so it loads at most once.
       loadGoogleMaps();
-      root.innerHTML = progress(2) + `<h3>${W.productStep.title}</h3><p class="status-msg">${W.productStep.loading}</p>`;
+      root.innerHTML = progress(2) + `<h3>${W.productStep.title}</h3>` + loadingPanel(W.productStep.loading);
       try {
         const res = await fetch(`${API}/api/prices?city=${encodeURIComponent(state.city)}`);
         if (!res.ok) throw new Error("prices failed");
@@ -884,9 +960,11 @@
     },
 
     // 4. Live coverage check + delivery-day picker.
-    async day() {
+    // `attempt` escalates a transient failure: attempt 1 offers one retry, attempt 2 (retry
+    // also failed) hands off to a human like a genuine no-slot answer (04 §5).
+    async day(attempt = 1) {
       track("wizard_step", { step: "day", n: 4 });
-      root.innerHTML = progress(4) + `<h3>${W.dayStep.title}</h3><p class="status-msg">${W.dayStep.checking}</p>`;
+      root.innerHTML = coverageLoading();
       try {
         const res = await fetch(`${API}/api/coverage`, {
           method: "POST",
@@ -897,44 +975,32 @@
             cross_streets: state.data.crossStreets,
           }),
         });
+        // 503 = "couldn't check" (upstream timeout/error), NOT "not covered".
         if (!res.ok) throw new Error("coverage failed");
         state.coverage = await res.json();
       } catch {
-        root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + deadEndActions("data");
-        bindBack();
+        if (attempt < 2) {
+          // First transient failure — offer one retry before giving up on the auto flow.
+          track("coverage_retry", { attempt });
+          root.innerHTML =
+            progress(4) +
+            `<h3>${W.coverageRetry.title}</h3>` +
+            `<p class="status-msg">${W.coverageRetry.message}</p>` +
+            `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
+            `<button class="btn btn-primary" data-retry="1">${W.coverageRetry.button}</button></div>`;
+          bindBack();
+          root
+            .querySelector("[data-retry]")
+            .addEventListener("click", () => steps.day(attempt + 1));
+          return;
+        }
+        // Retry also failed → same handoff as a genuine no-slot answer.
+        enterManualReview();
         return;
       }
       if (!state.coverage.covered || state.coverage.delivery_options.length === 0) {
-        // Covered city, but no delivery time we can offer → save the lead server-side and
-        // hand off to a human via WhatsApp (04 §5). AI stays silent for this lead.
-        track("manual_review", { stage: "address" });
-        const waHrefReview =
-          "https://wa.me/" +
-          CFG.WHATSAPP_NUMBER_SALES +
-          "?text=" +
-          encodeURIComponent(W.manualReview.waText);
-        // Best-effort capture; the human channel is WhatsApp regardless of this call.
-        fetch(`${API}/api/manual-review`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            source: "web",
-            name: `${state.data.firstName} ${state.data.lastName}`,
-            phone: state.data.phone,
-            city: state.city,
-            address: addressString(state.data),
-            cross_streets: state.data.crossStreets,
-            items: state.cart.map((c) => ({ product: c.name, qty: c.qty })),
-            ...attribution,
-          }),
-        }).catch(() => {});
-        root.innerHTML =
-          progress(4) +
-          `<h3>${W.manualReview.title}</h3>` +
-          `<p class="status-msg">${W.manualReview.message}</p>` +
-          `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
-          `<a class="btn btn-whatsapp" data-wa-loc="manual_review" target="_blank" rel="noopener" href="${waHrefReview}">${W.manualReview.button}</a></div>`;
-        bindBack();
+        // Covered city, but no delivery time we can offer → hand off to a human (04 §5).
+        enterManualReview();
         return;
       }
       track("coverage_result", { covered: true, options: state.coverage.delivery_options.length });

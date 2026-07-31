@@ -405,6 +405,31 @@ main > section h2::after {
 .status-msg { text-align: center; padding: 1.25rem 0.5rem; color: var(--body); }
 .status-msg.success { color: var(--success); font-weight: 600; font-size: 1.05rem; }
 
+/* Coverage-check loader (04 §5): a spinning bidón, water waving inside it. The whole group
+   (water clipped to the body + cap + outline) spins as one around the body centre, so the
+   water is always centred and contained — nothing shows outside the glass. Decorative;
+   motion is disabled under prefers-reduced-motion. */
+.coverage-anim { display: flex; justify-content: center; padding: 0.5rem 0 0.25rem; }
+.canister { width: 120px; height: auto; overflow: visible; }
+.canister-spin {
+  transform-box: view-box; transform-origin: 60px 78px;
+  animation: can-spin 3.4s linear infinite;
+}
+/* Counter-spin cancels the bottle's rotation so the water surface stays level (gravity),
+   even though its clip rotates with the glass. Same origin/period as can-spin, opposite sign. */
+.can-water { transform-box: view-box; transform-origin: 60px 78px; animation: can-counterspin 3.4s linear infinite; }
+.can-wave { transform-box: view-box; }
+.can-wave-back { fill: rgba(var(--blue-rgb), 0.4); animation: can-wave-move 3s linear infinite; }
+.can-wave-front { fill: rgba(var(--blue-rgb), 0.85); animation: can-wave-move 2.1s linear infinite; }
+.can-cap { fill: #9aa1ab; } /* grey cap, like the real bidón */
+.can-shell { fill: none; stroke: var(--blue-dark); stroke-width: 3.2; stroke-linejoin: round; }
+@keyframes can-wave-move { from { transform: translateX(0); } to { transform: translateX(-60px); } }
+@keyframes can-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+@keyframes can-counterspin { from { transform: rotate(0); } to { transform: rotate(-360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .canister-spin, .can-water, .can-wave-back, .can-wave-front { animation: none; }
+}
+
 /* ---------- how it works ---------- */
 
 .how { background: var(--celeste-050); }

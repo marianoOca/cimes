@@ -5,6 +5,7 @@ vi.mock("../src/kapso/send.js", () => ({
   sendButtons: vi.fn(async () => "wamid.out"),
   sendList: vi.fn(async () => "wamid.out"),
   sendFlow: vi.fn(async () => "wamid.out"),
+  sendLocation: vi.fn(async () => "wamid.out"),
   sendTemplate: vi.fn(async () => "wamid.out"),
 }));
 
@@ -19,7 +20,7 @@ import { getLeadByPhone } from "../src/db/leads.js";
 import { handleInbound } from "../src/engine/conversation.js";
 import { setGeocodingProvider } from "../src/engine/coverage.js";
 import { setPriceProvider } from "../src/ai/tools.js";
-import { sendButtons, sendList, sendText } from "../src/kapso/send.js";
+import { sendButtons, sendList, sendLocation, sendText } from "../src/kapso/send.js";
 import type { NormalizedInbound } from "../src/kapso/webhook.js";
 
 const catalog = {
@@ -107,7 +108,7 @@ describe("conversation engine — Flow A happy path (deterministic, no AI)", () 
     expect(lead.stage).toBe("datos_entrega");
     expect(lead.price).toBe(800);
 
-    // 4. Flow form response → coverage runs → day options.
+    // 4. Flow form response → coverage runs → map-pin confirmation.
     await handleInbound(
       db,
       inbound({
@@ -122,9 +123,15 @@ describe("conversation engine — Flow A happy path (deterministic, no AI)", () 
       }),
     );
     lead = getLeadByPhone(db, from)!;
-    expect(lead.stage).toBe("dia_entrega");
+    expect(lead.stage).toBe("confirmar_ubicacion");
     expect(lead.address).toBe("Rivadavia 770");
     expect(lead.price_list).toBe("5");
+    expect(sendLocation).toHaveBeenCalled(); // map pin sent
+
+    // 4b. Pin confirmed → day options.
+    await handleInbound(db, inbound({ kind: "button", content: "loc:yes" }));
+    lead = getLeadByPhone(db, from)!;
+    expect(lead.stage).toBe("dia_entrega");
     // 1 option → buttons (≤3 → buttons rule).
     expect(sendButtons).toHaveBeenCalled();
 
@@ -156,6 +163,63 @@ describe("conversation engine — Flow A happy path (deterministic, no AI)", () 
     ]) {
       expect(types).toContain(required);
     }
+  });
+
+  it("free-typed address at datos_entrega goes through the map pin (no AI)", async () => {
+    const db = openDb(":memory:");
+    const from = "5491100000042";
+    // Fast-path to datos_entrega.
+    await handleInbound(db, inbound({ content: "hola, soy de Luján, quiero un bidón de 20 litros" }));
+    expect(getLeadByPhone(db, from)!.stage).toBe("datos_entrega");
+    vi.clearAllMocks();
+
+    // Typed address (not the Flow form) → geocode + pin, not the AI.
+    await handleInbound(db, inbound({ content: "Rivadavia 770" }));
+    const lead = getLeadByPhone(db, from)!;
+    expect(lead.stage).toBe("confirmar_ubicacion");
+    expect(lead.address).toBe("Rivadavia 770");
+    expect(lead.location_attempts).toBe(1);
+    expect(sendLocation).toHaveBeenCalled();
+  });
+
+  it("map pin rejected twice → free re-entry, then human handoff (web parity)", async () => {
+    const db = openDb(":memory:");
+    const from = "5491100000042";
+
+    // Fast-path to datos_entrega, then submit the delivery-data form.
+    await handleInbound(db, inbound({ content: "hola, soy de Luján, quiero un bidón de 20 litros" }));
+    await handleInbound(
+      db,
+      inbound({
+        kind: "flow",
+        flowResponse: { nombre: "Ana", calle: "Rivadavia", altura: "770" },
+      }),
+    );
+    let lead = getLeadByPhone(db, from)!;
+    expect(lead.stage).toBe("confirmar_ubicacion");
+    expect(lead.location_attempts).toBe(1);
+
+    // First "No" → asked to re-type the full address (still attempt 1).
+    await handleInbound(db, inbound({ kind: "button", content: "loc:no" }));
+    lead = getLeadByPhone(db, from)!;
+    expect(lead.stage).toBe("confirmar_ubicacion");
+    const reenter = vi.mocked(sendText).mock.calls.map((c) => String(c[2]));
+    expect(reenter.some((t) => t.includes("Buenos Aires"))).toBe(true);
+
+    // Re-typed address → second pin (attempt 2).
+    await handleInbound(db, inbound({ content: "Luján, San Martín 1234" }));
+    lead = getLeadByPhone(db, from)!;
+    expect(lead.location_attempts).toBe(2);
+    expect(lead.address).toBe("Luján, San Martín 1234");
+
+    // Second "No" → stop and hand to a human.
+    vi.clearAllMocks();
+    await handleInbound(db, inbound({ kind: "button", content: "loc:no" }));
+    lead = getLeadByPhone(db, from)!;
+    expect(lead.ai_enabled).toBe(false);
+    expect(lead.labels).toContain("revision_cobertura");
+    const handoff = vi.mocked(sendText).mock.calls.map((c) => String(c[2]));
+    expect(handoff.some((t) => t.includes("verifico la cobertura"))).toBe(true);
   });
 
   it("uncovered city → otra_ciudad label + polite ending, no follow-ups", async () => {

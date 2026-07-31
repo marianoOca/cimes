@@ -48,6 +48,7 @@ function migrate(db: DB): void {
       chatwoot_conversation_id INTEGER,
       notes TEXT NOT NULL DEFAULT '',
       coverage_json TEXT,
+      location_attempts INTEGER NOT NULL DEFAULT 0,
       archived INTEGER NOT NULL DEFAULT 0,
       last_message_at TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -129,6 +130,15 @@ function migrate(db: DB): void {
       value TEXT NOT NULL
     );
   `);
+
+  // Additive column migrations for DBs created before the column existed
+  // (CREATE TABLE IF NOT EXISTS above never adds columns to an existing table).
+  const leadCols = new Set(
+    (db.prepare("PRAGMA table_info(leads)").all() as { name: string }[]).map((c) => c.name),
+  );
+  if (!leadCols.has("location_attempts")) {
+    db.exec("ALTER TABLE leads ADD COLUMN location_attempts INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 export function kvGet(db: DB, key: string): string | null {

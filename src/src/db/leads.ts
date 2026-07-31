@@ -7,6 +7,7 @@ export type Stage =
   | "inicio"
   | "producto"
   | "datos_entrega"
+  | "confirmar_ubicacion"
   | "dia_entrega"
   | "confirmacion"
   | "cliente_cerrado";
@@ -15,6 +16,7 @@ export const STAGES: Stage[] = [
   "inicio",
   "producto",
   "datos_entrega",
+  "confirmar_ubicacion",
   "dia_entrega",
   "confirmacion",
   "cliente_cerrado",
@@ -56,6 +58,8 @@ export interface Lead {
   chatwoot_conversation_id: number | null;
   notes: string;
   coverage_json: string | null;
+  /** How many address→map confirmations we've offered (map-confirm flow). */
+  location_attempts: number;
   archived: boolean;
   last_message_at: string | null;
   created_at: string;
@@ -132,6 +136,7 @@ const UPDATABLE = new Set([
   "chatwoot_conversation_id",
   "notes",
   "coverage_json",
+  "location_attempts",
   "last_message_at",
 ]);
 

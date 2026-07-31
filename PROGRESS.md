@@ -59,6 +59,27 @@ deprecated legacy `places.Autocomplete` → new **`AutocompleteSuggestion`** API
 (not `locationBias`). Google key verified valid (Places + Places New enabled) — never the problem.
 Captured as a do-not-repeat note in `docs/04-website §8` + a `GOOGLE_MAPS_KEY` row in §9.
 
+**Concurrency hardening + coverage-failure UX (2026-07-31).** Reviewed the app for concurrency
+(many users hitting website + bot + WaterService + gmaps at once). Verdict: mostly safe by design
+(single Node process + event-loop-serialized SQLite + per-lead queue + debounced gmaps). Real gaps
+were all at the WaterService edge — fixed the two that matter (working-tree, `src/` + `website/`):
+- **Single-flight login** (`waterservice/http.ts`): concurrent callers now await one `GetToken`
+  instead of a token stampede that overwrites/401s. Cache the login *promise*, not just the token.
+- **20s `AbortSignal.timeout`** on every WaterService `fetch` — an upstream hang had no ceiling and
+  the website's coverage fetch has none of its own. (Bounds each fetch, not the whole `wsCall`.)
+- **`POST /api/coverage` → 503 `coverage_unavailable`** on upstream failure (not a false `covered:false`).
+- **Website coverage-check escalation** (`app.js` `day(attempt)`): LOADING → on 503/error, **attempt 1
+  = retry only, no save**; retry-success → normal, no save; **attempt 2 fail = manual-review handoff**
+  (WhatsApp + save, same branch as no-slot). Capture fires only when the WhatsApp button shows, so a
+  recovered retry never leaves a phantom `revision_cobertura` lead. Full flow tree saved in `04-website §5`.
+- **Canister loader** (`app.js` `canisterAnim()` + `styles.css`): spinning bidón, water waves **level**
+  inside (clip rotates with the glass, water layer counter-rotates), proportioned from the botellon-12l
+  photo, ~70% fill. Shown during the check and each retry.
+- Not yet done: outbound concurrency cap / server rate-limit and the non-atomic `getOrCreateLead`
+  (§concurrency review options 3 + 4) — low urgency at current scale, left as later hardening.
+- Docs updated (`01-core-api §POST /api/coverage` + §13, `04-website §4/§5`). typecheck clean,
+  **80 tests** (+`concurrency.test.ts`: single-flight + 503; +3 website retry-flow tests). Uncommitted.
+
 ## Last session (2026-07-19)
 
 **Done:**
@@ -310,3 +331,41 @@ file's own documentation convention, for no real benefit). Confirmed via
 Caddyfile, domain names for `<backend-domain>`/`<chatwoot-domain>` — all
 spec'd in `ops/DEPLOY.md`, blocked on the client's infra per the existing
 "Blocked / waiting on client" list.
+
+## Session (2026-07-31) — WhatsApp address confirm via map pin
+
+Closed the WhatsApp-vs-web gap on address entry. Diagnosis first (Kapso skill loaded):
+day/time was **already** dynamic per address on WhatsApp (shared `runCoverageForLead`
+→ #12 → `delivery_options`), just rendered as a post-Flow interactive message — no gap
+there. Real gap was address confirmation: web has Google Places typeahead, WhatsApp had
+a static Flow form and no location confirmation. Live typeahead is impossible in a
+WhatsApp Flow (no on-change on `TextInput`); chose the native **location message**
+(`type:location`, WhatsApp renders the map thumbnail from lat/lng we already get from
+#12) + Sí/No buttons instead. All native interactive messages — **no dynamic Flow, no
+data endpoint, no Kapso Function, no Flows encryption**; backend stays the brain.
+
+New flow (between `datos_entrega` and `dia_entrega`): geocode → send pin + "¿es correcta?"
+→ **Sí** → coverage gate (`delivery_options>0` → `dia_entrega`; else manual-review handoff)
+→ **No** → free re-entry (full address, Prov. Bs As) → 2nd pin → **Sí** gate / **2nd No or
+no-coords** → stop + `enterManualReview` (web parity, AI off, operator pinged). Handoff
+copy: "Permitime un momento mientras verifico la cobertura en tu área, ¡gracias!".
+
+Changes: new stage `confirmar_ubicacion` + `location_attempts` column (additive migration);
+`sendLocation` in `kapso/send.ts`; `enterLocationConfirm`/`sendLocationConfirm`/
+`handleLocationRejected`/`locationConfirmed` in `engine/conversation.ts`; `loc:yes|no`
+button routing + re-entry text trigger; 5 es-AR copy strings + a followup key.
+typecheck clean, **82 tests** (map-confirm happy step, reject→re-entry→handoff, and
+free-typed-address→pin). `flow-delivery-data.json` unchanged (stays a static form).
+
+**Caveats / follow-ups:**
+- `type:location` send **verified against the live Kapso API contract** (2026-07-31):
+  `sendMessage` OpenAPI lists `location` as supported; `LocationMessage` schema =
+  `{latitude, longitude, name?, address?}`, matching `send.ts`. Optional belt-and-suspenders:
+  one live smoke send (needs a recipient with an open 24h window).
+- Map-confirm now covers **both** address paths: the Flow form **and** free-typed text.
+  A text message arriving at `datos_entrega` is captured deterministically as the address
+  and routed through the pin flow (no AI in the alta spine). Tradeoff: FAQ/AI answering is
+  skipped at `datos_entrega` — a message there is treated as the address (geocode-fails →
+  re-entry prompt nudges the user).
+- `runCoverageForLead` still applies `mal_lead` + operator alert on a no-neighbors first
+  attempt even if the address was just wrong (pre-existing behavior); minor label noise.

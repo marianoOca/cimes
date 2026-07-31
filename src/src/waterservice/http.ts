@@ -26,9 +26,20 @@ interface TokenCache {
   expiresAt: number; // epoch ms, with safety margin
 }
 
-let cache: TokenCache | null = null;
+// Abort any WaterService fetch that stalls past this. The website shows a
+// canister animation while it waits, so a generous 20s is fine — better a slow
+// answer than a hang with no ceiling (the frontend fetch has no timeout of its
+// own, so a hung upstream would otherwise freeze the wizard indefinitely).
+const WS_TIMEOUT_MS = 20_000;
 
-async function login(): Promise<string> {
+let cache: TokenCache | null = null;
+// Single-flight login: while one login is in-flight, concurrent callers await
+// the same promise instead of each firing their own GetToken. Without this, N
+// calls arriving at cold-start/expiry mint N tokens that overwrite each other —
+// and if WaterService invalidates the prior token per login, the losers 401.
+let loginInFlight: Promise<string> | null = null;
+
+async function doLogin(): Promise<string> {
   const res = await fetch(`${config.WATERSERVICE_BASE_URL}/api/Session/GetToken`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -36,6 +47,7 @@ async function login(): Promise<string> {
       username: config.WATERSERVICE_USER,
       password: config.WATERSERVICE_PASSWORD,
     }),
+    signal: AbortSignal.timeout(WS_TIMEOUT_MS),
   });
   const body = tokenResponse.parse(await res.json());
   if (body.error !== 0) {
@@ -45,6 +57,14 @@ async function login(): Promise<string> {
   // of 30 min instead of trusting clock alignment.
   cache = { token: body.tokenValido, expiresAt: Date.now() + 30 * 60_000 };
   return body.tokenValido;
+}
+
+function login(): Promise<string> {
+  if (loginInFlight) return loginInFlight;
+  loginInFlight = doLogin().finally(() => {
+    loginInFlight = null;
+  });
+  return loginInFlight;
 }
 
 async function getToken(): Promise<string> {
@@ -73,6 +93,7 @@ export async function wsCall(opts: WsCallOptions, retried = false): Promise<unkn
   const init: RequestInit = {
     method: opts.method,
     headers: { "Content-Type": "application/json", CURRENTTOKENVALUE: token },
+    signal: AbortSignal.timeout(WS_TIMEOUT_MS),
   };
   if (opts.method === "GET" && opts.data) {
     const qs = new URLSearchParams();

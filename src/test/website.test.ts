@@ -47,6 +47,22 @@ function buildPage(fetchImpl: Fetch, url = "https://www.cimes.com.ar/", file = "
   return dom;
 }
 
+// Like buildPage but hands the test full control of each Response (ok + json), so a
+// coverage call can return a 503 the way the real backend does on an upstream timeout.
+function buildRawPage(
+  fetchFn: (u: string, init?: RequestInit) => { ok: boolean; json: () => Promise<unknown> },
+  citySlug = "lujan",
+) {
+  const url = `https://www.cimes.com.ar/alta/?city=${citySlug}`;
+  const dom = new JSDOM(read("alta/index.html"), { url, runScripts: "outside-only" });
+  const w = dom.window as unknown as { eval(code: string): void; fetch: unknown };
+  w.fetch = vi.fn(async (u: string, init?: RequestInit) => fetchFn(u, init));
+  w.eval(read("config.js"));
+  w.eval(read("copy.es-AR.js"));
+  w.eval(read("app.js"));
+  return dom;
+}
+
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const evalIn = (dom: JSDOM, code: string) =>
   (dom.window as unknown as { eval(c: string): void }).eval(code);
@@ -571,5 +587,98 @@ describe("website: Flow B wizard", () => {
     await runHappyPath(dom);
     expect(orders).toHaveLength(1);
     expect(orders[0]).toMatchObject({ utm_source: "ig", utm_campaign: "verano" });
+  });
+
+  // Coverage-check failure escalation (04 §5): attempt 1 offers one retry (no save); a retry
+  // that succeeds proceeds normally (no save); a second failure hands off to WhatsApp + saves.
+  it("coverage failure: first attempt shows a retry and saves no lead", async () => {
+    const reviews: unknown[] = [];
+    let coverageCalls = 0;
+    const dom = buildRawPage((u, init) => {
+      if (u.includes("/api/prices")) return { ok: true, json: async () => catalog };
+      if (u.includes("/api/coverage")) {
+        coverageCalls++;
+        return { ok: false, json: async () => ({ error: "coverage_unavailable" }) };
+      }
+      if (u.includes("/api/manual-review")) {
+        reviews.push(JSON.parse(String(init?.body)));
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      throw new Error(`unexpected fetch ${u}`);
+    });
+    await tick();
+    pickProduct(dom);
+    fillAndSubmitData(dom);
+    await tick();
+
+    const root = dom.window.document.querySelector("#wizard-root")!;
+    expect(root.textContent).toContain("salpicarle soda"); // retry copy, not the handoff copy
+    expect(root.querySelector("[data-retry]")).not.toBeNull();
+    expect(root.querySelector('a[data-wa-loc="manual_review"]')).toBeNull(); // no handoff yet
+    expect(reviews).toHaveLength(0); // nothing saved on the first failure
+    expect(coverageCalls).toBe(1);
+  });
+
+  it("coverage retry succeeds: reaches the day picker and still saves no lead", async () => {
+    const reviews: unknown[] = [];
+    let coverageCalls = 0;
+    const dom = buildRawPage((u) => {
+      if (u.includes("/api/prices")) return { ok: true, json: async () => catalog };
+      if (u.includes("/api/coverage")) {
+        coverageCalls++;
+        return coverageCalls === 1
+          ? { ok: false, json: async () => ({}) }
+          : { ok: true, json: async () => coverageOk };
+      }
+      if (u.includes("/api/manual-review")) {
+        reviews.push(1);
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      throw new Error(`unexpected fetch ${u}`);
+    });
+    await tick();
+    pickProduct(dom);
+    fillAndSubmitData(dom);
+    await tick(); // attempt 1 fails → retry panel
+    click(dom, "[data-retry]");
+    await tick(); // attempt 2 succeeds → day picker
+
+    const root = dom.window.document.querySelector("#wizard-root")!;
+    expect(root.textContent).toContain("Reparto 19 · sábado"); // real options
+    expect(reviews).toHaveLength(0); // retry-success must never save a review lead
+    expect(coverageCalls).toBe(2);
+  });
+
+  it("coverage fails twice: hands off to WhatsApp and saves the lead once", async () => {
+    const reviews: Array<Record<string, unknown>> = [];
+    let coverageCalls = 0;
+    const dom = buildRawPage((u, init) => {
+      if (u.includes("/api/prices")) return { ok: true, json: async () => catalog };
+      if (u.includes("/api/coverage")) {
+        coverageCalls++;
+        return { ok: false, json: async () => ({}) };
+      }
+      if (u.includes("/api/manual-review")) {
+        reviews.push(JSON.parse(String(init?.body)));
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      throw new Error(`unexpected fetch ${u}`);
+    });
+    await tick();
+    pickProduct(dom);
+    fillAndSubmitData(dom);
+    await tick(); // attempt 1 → retry panel
+    click(dom, "[data-retry]");
+    await tick(); // attempt 2 → handoff
+
+    const root = dom.window.document.querySelector("#wizard-root")!;
+    expect(root.textContent).toContain("Estás en nuestra zona"); // manual-review copy
+    const wa = root.querySelector('a[data-wa-loc="manual_review"]') as HTMLAnchorElement;
+    expect(wa).not.toBeNull();
+    expect(decodeURIComponent(wa.href)).toContain("[REV-COB]");
+    expect(root.querySelector("[data-retry]")).toBeNull(); // no second retry offered
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toMatchObject({ name: "Ana Prueba", city: "Luján", address: "Rivadavia 770" });
+    expect(coverageCalls).toBe(2);
   });
 });

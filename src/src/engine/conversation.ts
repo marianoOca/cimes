@@ -13,7 +13,7 @@ import {
   updateLead,
   type Lead,
 } from "../db/leads.js";
-import { sendButtons, sendFlow, sendList, sendText } from "../kapso/send.js";
+import { sendButtons, sendFlow, sendList, sendLocation, sendText } from "../kapso/send.js";
 import type { NormalizedInbound } from "../kapso/webhook.js";
 import { runAiTurn } from "../ai/agent.js";
 import { getPriceProvider } from "../ai/tools.js";
@@ -134,6 +134,15 @@ async function presentStage(db: DB, leadId: string, phoneNumberId: string): Prom
         await reply(lead, phoneNumberId, db, copy.deliveryDataPrompt);
       }
       break;
+    case "confirmar_ubicacion": {
+      const coords = coverageOf(lead)?.coordinates;
+      if (coords) {
+        await sendLocationConfirm(db, lead, coords, phoneNumberId);
+      } else {
+        await reply(lead, phoneNumberId, db, copy.locationReenterPrompt);
+      }
+      break;
+    }
     case "dia_entrega": {
       const coverage = coverageOf(lead);
       const options = coverage?.delivery_options ?? [];
@@ -254,21 +263,90 @@ async function handleDeliveryData(
   if (fields.address) patch.address = fields.address;
   if (fields.cross_streets) patch.cross_streets = fields.cross_streets;
   if (fields.notes) patch.notes = fields.notes;
-  let lead = updateLead(db, leadId, patch);
+  const lead = updateLead(db, leadId, patch);
   if (!lead.address) return;
+  // First address → geocode and show the pin for the customer to confirm.
+  await enterLocationConfirm(db, leadId, lead.address, 1, phoneNumberId);
+}
 
-  const coverage = await runCoverageForLead(db, lead, lead.address);
-  lead = updateLead(db, leadId, { coverage_json: JSON.stringify(coverage) });
-  // Covered city but no offerable delivery time (no serviceable neighbor/route) → hand to
-  // a human instead of dead-ending (01 §4.5 / 04-website §5).
-  if (coverage.delivery_options.length === 0) {
+/**
+ * Geocode `address`, persist the coverage result, and ask the customer to confirm the
+ * pin on a map (map-confirm flow). `attempt` is 1 for the structured delivery-data
+ * address, 2 for the free re-entered one. No geocode result → treated as a rejection.
+ */
+async function enterLocationConfirm(
+  db: DB,
+  leadId: string,
+  address: string,
+  attempt: number,
+  phoneNumberId: string,
+): Promise<void> {
+  const lead = getLeadById(db, leadId)!;
+  const coverage = await runCoverageForLead(db, lead, address);
+  updateLead(db, leadId, {
+    coverage_json: JSON.stringify(coverage),
+    location_attempts: attempt,
+  });
+  enterStage(db, leadId, "confirmar_ubicacion");
+  if (coverage.coordinates) {
+    await sendLocationConfirm(db, getLeadById(db, leadId)!, coverage.coordinates, phoneNumberId);
+  } else {
+    // Couldn't geocode the address at all — same branch as the customer saying "no".
+    await handleLocationRejected(db, leadId, phoneNumberId);
+  }
+}
+
+/** Send the pinned map + Sí/No confirmation buttons. */
+async function sendLocationConfirm(
+  db: DB,
+  lead: Lead,
+  coords: { lat: number; lng: number },
+  phoneNumberId: string,
+): Promise<void> {
+  await sendLocation(phoneNumberId, lead.phone, {
+    latitude: coords.lat,
+    longitude: coords.lng,
+    name: lead.address,
+    address: title(lead.city),
+  });
+  await sendButtons(phoneNumberId, lead.phone, copy.locationConfirmPrompt, [
+    { id: "loc:yes", title: copy.locationConfirmYes },
+    { id: "loc:no", title: copy.locationConfirmNo },
+  ]);
+}
+
+/**
+ * Customer rejected the pin (or geocoding failed). First rejection → ask for the full
+ * address again. Second → stop and hand to a human, exactly like the web "no driver
+ * reaches" path (01 §4.5).
+ */
+async function handleLocationRejected(
+  db: DB,
+  leadId: string,
+  phoneNumberId: string,
+): Promise<void> {
+  const lead = getLeadById(db, leadId)!;
+  if (lead.location_attempts >= 2) {
     await enterManualReview(db, lead);
-    await reply(lead, phoneNumberId, db, copy.coverageNegativeInCity);
+    await reply(lead, phoneNumberId, db, copy.locationHandoff);
+    return;
+  }
+  await reply(lead, phoneNumberId, db, copy.locationReenterPrompt);
+}
+
+/** Pin confirmed: proceed to day selection, or hand off if no route/time can be offered. */
+async function locationConfirmed(db: DB, leadId: string, phoneNumberId: string): Promise<void> {
+  const coverage = coverageOf(getLeadById(db, leadId)!);
+  if (!coverage || coverage.delivery_options.length === 0) {
+    // Covered pin but no serviceable route/time → human review (01 §4.5 / 04-website §5).
+    await enterManualReview(db, getLeadById(db, leadId)!);
+    await reply(getLeadById(db, leadId)!, phoneNumberId, db, copy.locationHandoff);
     return;
   }
   // Re-quote if the location-based list changed the price (01 §4.1).
-  if (lead.product) {
-    const catalog = await getPriceProvider().getPricesForList(coverage.price_list!);
+  const lead = getLeadById(db, leadId)!;
+  if (lead.product && coverage.price_list) {
+    const catalog = await getPriceProvider().getPricesForList(coverage.price_list);
     const product = catalog.products.find((p) => p.name === lead.product);
     if (product && product.price !== lead.price) {
       updateLead(db, leadId, { price: product.price });
@@ -276,6 +354,7 @@ async function handleDeliveryData(
     }
   }
   enterStage(db, leadId, "dia_entrega");
+  await presentStage(db, leadId, phoneNumberId);
 }
 
 async function finalizeOrder(db: DB, leadId: string, phoneNumberId: string): Promise<void> {
@@ -416,6 +495,13 @@ async function routeMessage(db: DB, leadId: string, msg: NormalizedInbound): Pro
         }
         return;
       }
+      case "loc":
+        if (value === "yes") {
+          await locationConfirmed(db, leadId, pn);
+        } else {
+          await handleLocationRejected(db, leadId, pn);
+        }
+        return;
       case "confirm":
         if (value === "yes") {
           await finalizeOrder(db, leadId, pn);
@@ -445,13 +531,26 @@ async function routeMessage(db: DB, leadId: string, msg: NormalizedInbound): Pro
       },
       pn,
     );
-    await presentStage(db, leadId, pn);
+    // handleDeliveryData drives the next send (map confirm) itself.
     return;
   }
 
   // --- free text: engine-side matching first (hybrid fast path, 02 §4) ---
   const text = msg.content;
   if (msg.kind === "text" && text) {
+    // Awaiting a re-typed address after the customer rejected the map pin.
+    if (lead.stage === "confirmar_ubicacion") {
+      updateLead(db, leadId, { address: text.trim() });
+      await enterLocationConfirm(db, leadId, text.trim(), 2, pn);
+      return;
+    }
+    // Free-typed address at the data step → same deterministic map-pin flow (no AI).
+    if (lead.stage === "datos_entrega") {
+      updateLead(db, leadId, { address: text.trim() });
+      await enterLocationConfirm(db, leadId, text.trim(), 1, pn);
+      return;
+    }
+
     let advanced = false;
 
     if (!lead.city) {

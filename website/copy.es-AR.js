@@ -150,6 +150,13 @@ window.CIMES_COPY = {
       checking: "Verificando cobertura…",
       optionLabel: (route, weekday, window) => `Reparto ${route} · ${weekday} ${window}`,
     },
+    // Coverage check timed out / errored on the first try (app.js day(), attempt 1). Offer
+    // one retry; if it fails again the flow falls through to manualReview below.
+    coverageRetry: {
+      title: "Estamos verificando tu zona…",
+      message: "Alguien debió salpicarle soda al servidor. Probá de nuevo 👇",
+      button: "Reintentar",
+    },
     // Covered city, but no delivery time we can offer (no serviceable route). Hand off to
     // a human via WhatsApp; the lead is already saved server-side (POST /api/manual-review).
     manualReview: {

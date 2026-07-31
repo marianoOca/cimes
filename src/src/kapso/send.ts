@@ -75,6 +75,16 @@ export function sendList(
   });
 }
 
+/** A pinned location message (native map preview → taps into the maps app). Used
+ *  to have the customer confirm we geocoded their address to the right spot. */
+export function sendLocation(
+  phoneNumberId: string,
+  to: string,
+  loc: { latitude: number; longitude: number; name?: string; address?: string },
+): Promise<string> {
+  return post(phoneNumberId, { to, type: "location", location: loc });
+}
+
 /** The delivery-data form: a WhatsApp Flow pre-published in Kapso (02 §4). */
 export function sendFlow(
   phoneNumberId: string,

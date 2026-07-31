@@ -264,6 +264,8 @@ Request:  { city: string, address: string, cross_streets?: string }
 ```
 Emits a `coverage_checked` event.
 
+**Failure contract — 503, never a false negative.** If `GeocodingProvider.resolve` throws (WaterService timeout — see §13 — network error, or a WaterService body error), the endpoint answers **`503 { error: "coverage_unavailable" }`**, **not** a `200` with `covered: false`. Rationale: an upstream failure is "couldn't check", not "not covered"; conflating them would tell an in-zone lead they're unreachable. The website keys its **retry → manual-review** escalation off this 503 (`04-website.md` §4 step 4 / §5). A genuine negative is still a normal `200 { covered: false }` / zero `delivery_options`.
+
 **How it resolves (end-to-end call chain).** The runtime path from the browser to WaterService:
 
 1. The browser (website wizard **step 4**) POSTs here — it **never calls WaterService directly**. The whole coverage decision is server-side.
@@ -414,7 +416,8 @@ Full guardrail set is in `00-master.md §6` — **read it.** Because this module
 
 - **WaterService always returns HTTP 200.** Check the response **body's `error` field** (`error != 0` = failure), never the HTTP status. Treating 200 as success silently accepts failures.
 - **Date formats differ by direction.** Response timestamps are .NET format `/Date(1753112501144)/` — parse the epoch-ms out. Request dates are `dd/MM/yyyy` strings. Some numeric fields arrive as strings — coerce explicitly.
-- **Auth token** goes in header **`CURRENTTOKENVALUE`** on every non-login call. Cache it; re-login on expiry / 401. All WaterService calls server-side only.
+- **Auth token** goes in header **`CURRENTTOKENVALUE`** on every non-login call. Cache it; re-login on expiry / 401. All WaterService calls server-side only. **Login is single-flight:** while one `GetToken` is in flight, concurrent callers await the *same* promise — never fire N parallel logins that overwrite each other's token (if WaterService invalidates the prior token per login, the losers 401). Cache the login **promise**, not just the resulting token.
+- **Every WaterService `fetch` has a timeout** (`AbortSignal.timeout`, 20s) — an upstream hang otherwise has no ceiling and freezes the caller (the website's coverage fetch has no timeout of its own; it relies on this). Note the timeout bounds each `fetch`, not the whole `wsCall` — the single auth-retry can stack two waits (~40s worst case). A coverage-check failure surfaces to the browser as `503` (§`POST /api/coverage`).
 - **Idempotency.** Dedupe inbound WhatsApp messages by message ID. **Before #6 (create client), check for an existing client by phone via #2** to avoid duplicate altas. Pipeline replay must not create a second client/ticket (reuse stored `waterservice_client_id` / `ticket_id`).
 - **Operator override window.** A confirmed order stays editable in the CRM until the driver ticket is actually dispatched (day before delivery). **The scheduler reads the order's current state AT dispatch time** — never cache route/day from confirmation time.
 - **Timezone `America/Argentina/Buenos_Aires`** for all "tomorrow", business-hours, and follow-up-timer logic. Store event timestamps in UTC; compute local-day logic in this zone.

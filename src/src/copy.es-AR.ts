@@ -4,10 +4,10 @@
 
 export const copy = {
   greeting:
-    "¡Hola! 👋 Soy el asistente de CIMES. Te ayudo a pedir agua a domicilio en un toque.",
-  cityPrompt: "¿De qué ciudad sos? Elegí de la lista 👇",
+    "Buenas! Te voy a ayudar a darte de alta y darle CIMES a tu vida!",
+  cityPrompt: "De qué ciudad sos? Elegí de la lista 👇",
   cityListButton: "Ver ciudades",
-  productPrompt: "¿Qué producto te interesa? Elegí de la lista 👇",
+  productPrompt: "Qué producto te interesa? Elegí de la lista 👇",
   productListButton: "Ver productos",
   quote: (product: string, price: number): string =>
     `${product} te sale $${formatPrice(price)}. ¿Querés que te lo llevemos?`,
@@ -18,8 +18,16 @@ export const copy = {
   coverageNegativeInCity:
     "No encontramos reparto para esa dirección todavía. Lo pasamos al equipo para revisarlo y te avisamos, ¿dale?",
   deliveryDataPrompt:
-    "¡Buenísimo! Para coordinar la entrega necesito tus datos. Completá el formulario 👇 o escribime tu dirección directamente.",
+    "Buenísimo! Para coordinar la entrega necesito tus datos. Completá el formulario 👇 o escribime tu dirección directamente.",
   deliveryDataFormButton: "Completar datos",
+  locationConfirmPrompt:
+    "La ubicación es correcta?",
+  locationConfirmYes: "Sí",
+  locationConfirmNo: "No",
+  locationReenterPrompt:
+    "Escribime la dirección completa (calle y número y ciudad). Solo entregamos en la provincia de Buenos Aires 🙌",
+  locationHandoff:
+    "Permitime un momento mientras verifico la cobertura en tu área, gracias!",
   deliveryDayPrompt: "¿Qué día te queda mejor? Estas son las opciones para tu zona 👇",
   deliveryDayFreeText: "Escribime qué día te viene mejor y te confirmo.",
   deliveryWindow: (hourMin: string, hourMax: string): string =>
@@ -33,15 +41,16 @@ export const copy = {
     day: string;
     window: string;
   }): string =>
-    `Te confirmo el pedido:\n\n📦 ${o.product} — $${formatPrice(o.price)}\n📍 ${o.address}\n🚚 ${o.day} ${o.window}\n\n¿Está todo bien?`,
+    `Buenísimo! Te confirmo el pedido:\n\n📦 ${o.product} — $${formatPrice(o.price)}\n📍 ${o.address}\n🚚 ${o.day} ${o.window}\n\nEstá todo bien?`,
   confirmButton: "Confirmar",
   modifyButton: "Modificar",
   confirmation: (day: string, window: string): string =>
     `¡Listo! 🎉 Te lo llevamos el ${day} ${window}. El pago es al repartidor cuando te lo entrega. ¡Gracias por elegir CIMES!`,
   followup: {
-    inicio: "¡Hola! ¿Seguís ahí? Contame de qué ciudad sos y te paso los precios 😊",
+    inicio: "Hola! Seguís ahí? Contame de qué ciudad sos y te paso los precios 😊",
     producto: "¿Te quedó alguna duda con los productos? Decime cuál te interesa y te paso el precio.",
     datos_entrega: "Nos faltan solo tus datos de entrega para coordinar el pedido. ¿Los completamos?",
+    confirmar_ubicacion: "Quedó pendiente confirmar tu dirección en el mapa. ¿La revisás?",
     dia_entrega: "Quedó pendiente elegir el día de entrega. ¿Cuál te queda mejor?",
     confirmacion: "Tu pedido está casi listo, solo falta confirmarlo. ¿Lo cerramos?",
   },

@@ -47,7 +47,7 @@ export function buildServer(db: DB): FastifyInstance {
 
   const geocoding = createGeocodingProvider();
 
-  app.post("/api/coverage", async (req) => {
+  app.post("/api/coverage", async (req, reply) => {
     const body = z
       .object({
         city: z.string().min(1),
@@ -55,10 +55,19 @@ export function buildServer(db: DB): FastifyInstance {
         cross_streets: z.string().optional(),
       })
       .parse(req.body);
-    const result = await geocoding.resolve(
-      `Argentina, ${body.city}, ${body.address}`,
-      config.COVERAGE_RADIUS_M,
-    );
+    let result;
+    try {
+      result = await geocoding.resolve(
+        `Argentina, ${body.city}, ${body.address}`,
+        config.COVERAGE_RADIUS_M,
+      );
+    } catch (err) {
+      // WaterService/geocoding unavailable (timeout, network, upstream error) — this is
+      // "couldn't check", NOT "not covered". Answer 503 so the website shows its retry →
+      // WhatsApp escalation instead of wrongly telling the lead they're out of zone.
+      req.log.error({ err }, "coverage check failed upstream");
+      return reply.code(503).send({ error: "coverage_unavailable" });
+    }
     emitEvent(db, {
       lead_id: "web-anonymous",
       source: "web",
