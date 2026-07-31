@@ -240,6 +240,7 @@ Thin wrappers over core-api providers/endpoints. Exact signatures/impl in `01-co
 | `get_delivery_options(address)` | Returns available delivery-day options (route + weekday + time window). |
 | `confirm_order(order)` | Fires the order pipeline (`POST /api/orders`): WaterService client #6 + contact #7 + driver ticket #3 + sheet row + label `cliente_cerrado`. Idempotent per lead. |
 | `handoff(reason)` | Sets `ai_enabled=false`, sends the tell-user-to-write-support copy, notifies operator (§9). |
+| `registrar_zona(zona)` | Out-of-coverage "Otra ciudad" path only (stage `esperando_zona`): records the city/zone (label `otra_ciudad` + orders-sheet lead row, WhatsApp equivalent of `POST /api/waitlist`) and sets `ai_enabled=false`. The AI stays on during the wait to field questions and captures the zone conversationally; on capture it thanks the user and says we'll contact them when we expand there. |
 
 Structured steps (city/product/day/confirm) are **deterministic UI** (buttons/lists/form), not free-text parsing. The AI handles **FAQs, glue, and free-text extraction** (§4).
 

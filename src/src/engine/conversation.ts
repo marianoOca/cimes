@@ -471,7 +471,20 @@ async function routeMessage(db: DB, leadId: string, msg: NormalizedInbound): Pro
     switch (kind) {
       case "city": {
         if (value === "otra") {
-          await setCity(db, lead, "otra", pn);
+          // Out of coverage: tag it now (otra_ciudad is terminal → no follow-ups),
+          // ask which city, and keep the AI on to field questions + capture the zone.
+          enterStage(db, leadId, "esperando_zona");
+          if (addLabel(db, leadId, "otra_ciudad")) {
+            emitEvent(db, {
+              lead_id: leadId,
+              source: lead.source,
+              city: lead.city,
+              event_type: "label_applied",
+              stage: "esperando_zona",
+              metadata: { label: "otra_ciudad" },
+            });
+          }
+          await reply(lead, pn, db, copy.zonePrompt);
         } else if (await setCity(db, lead, value, pn)) {
           await presentStage(db, leadId, pn);
         }
@@ -538,6 +551,16 @@ async function routeMessage(db: DB, leadId: string, msg: NormalizedInbound): Pro
   // --- free text: engine-side matching first (hybrid fast path, 02 §4) ---
   const text = msg.content;
   if (msg.kind === "text" && text) {
+    // Out of coverage, waiting on the zone: hand to the AI. It fields any questions
+    // and records the city via registrar_zona (which ends the flow + turns AI off).
+    // Deterministic city/product matching is skipped here on purpose.
+    if (lead.stage === "esperando_zona") {
+      const result = await runAiTurn(db, leadId, text, { phoneNumberId: pn }, null);
+      for (const replyText of result.replies) {
+        await reply(getLeadById(db, leadId)!, pn, db, replyText);
+      }
+      return;
+    }
     // Awaiting a re-typed address after the customer rejected the map pin.
     if (lead.stage === "confirmar_ubicacion") {
       updateLead(db, leadId, { address: text.trim() });

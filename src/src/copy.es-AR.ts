@@ -7,6 +7,7 @@ export const copy = {
     "Buenas! Te voy a ayudar a darte de alta y darle CIMES a tu vida!",
   cityPrompt: "De qué ciudad sos? Elegí de la lista 👇",
   cityListButton: "Ver ciudades",
+  zonePrompt: "Ok! En qué ciudad recibirías el pedido?",
   productPrompt: "Qué producto te interesa? Elegí de la lista 👇",
   productListButton: "Ver productos",
   quote: (product: string, price: number): string =>

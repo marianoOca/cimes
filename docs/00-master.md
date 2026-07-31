@@ -179,9 +179,9 @@ Five working stages (`inicio`, `producto`, `datos_entrega`, `dia_entrega`, `conf
 
 The chatbot exposes exactly these tools to the model (details, signatures, and prompt in `02-chatbot.md`):
 
-`get_prices`, `check_coverage`, `get_delivery_options`, `confirm_order`, `handoff`
+`get_prices`, `check_coverage`, `get_delivery_options`, `confirm_order`, `handoff`, `registrar_zona`
 
-These are thin wrappers over core-api providers/endpoints: `get_prices` → PriceProvider, `check_coverage` / `get_delivery_options` → GeocodingProvider + WaterService coverage (#12), `confirm_order` → `POST /api/orders` pipeline, `handoff` → sets `ai_enabled = false` (§5.2) and notifies the operator.
+These are thin wrappers over core-api providers/endpoints: `get_prices` → PriceProvider, `check_coverage` / `get_delivery_options` → GeocodingProvider + WaterService coverage (#12), `confirm_order` → `POST /api/orders` pipeline, `handoff` → sets `ai_enabled = false` (§5.2) and notifies the operator. `registrar_zona` → the WhatsApp equivalent of `POST /api/waitlist`: records an out-of-coverage city/zone (label `otra_ciudad` + orders-sheet lead row) and sets `ai_enabled = false`. It exists only for the WhatsApp "Otra ciudad" path, where — unlike the website form — the AI stays on to field questions while capturing the zone conversationally.
 
 ### 5.6 REST endpoints core-api exposes (for website & chatbot)
 

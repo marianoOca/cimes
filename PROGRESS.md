@@ -369,3 +369,48 @@ free-typed-address→pin). `flow-delivery-data.json` unchanged (stays a static f
   re-entry prompt nudges the user).
 - `runCoverageForLead` still applies `mal_lead` + operator alert on a no-neighbors first
   attempt even if the address was just wrong (pre-existing behavior); minor label noise.
+
+## 2026-07-31 — WhatsApp "Otra ciudad" waitlist (AI-driven capture)
+
+Out-of-coverage path on WhatsApp now captures the zone with the AI kept **on**, so it can
+answer questions while getting the city — closer to how a person would handle it, and it
+also lands a waitlist row in the orders sheet like the website's `POST /api/waitlist`.
+Before, tapping **"Otra"** stored the city literally as `"otra"` (zone lost) and dead-ended.
+
+New flow:
+- Tap **"Otra"** → branch stage `esperando_zona`, label **`otra_ciudad`** immediately
+  (it's a terminal label → follow-ups suppressed from here on), reply `zonePrompt`
+  ("Ok! ¿En qué ciudad recibirías el pedido?"), **AI stays on** (`ai_enabled` untouched).
+- Free text while `esperando_zona` is routed **straight to the AI** (deterministic
+  city/product matching skipped on purpose), with `catalog=null` (no prices for an
+  uncovered area).
+- The AI follows a new system-prompt rule: **city** → call `registrar_zona(zona)` then
+  thank + "no llegamos ahí todavía, te contactamos cuando lleguemos" close; **question
+  only** → answer + re-ask the city, stay in state; **city + question** → answer the
+  question and do the close in the same turn.
+- `registrar_zona(zona)` (new **6th AI tool**) stores the zone as `city`, keeps
+  `otra_ciudad`, **queues the waitlist sheet row** (`sheet_append_order`, `order_id:null`,
+  dedupe `sheet_waitlist:<lead>`), and sets **`ai_enabled=false`**. Next inbound → mirror
+  only; flow ends.
+
+Contract change: the canonical AI-tool set went from 5 → **6** (`registrar_zona` added).
+Updated `00-master.md §5.5` and `02-chatbot.md` tool table to match — it's the WhatsApp
+analog of `POST /api/waitlist`, existing only because the WhatsApp path keeps the AI on
+during capture (the web form doesn't).
+
+Changes: `esperando_zona` in the `Stage` union (branch off `inicio`, **not** in linear
+`STAGES` — no DB constraint, `stageIndex/nextStage` unused at runtime); `zonePrompt` copy;
+tap-Otra button case (tag + ask, AI on); `esperando_zona` free-text → `runAiTurn`;
+`registrar_zona` tool def + handler (`ai/tools.js`); system-prompt waitlist section
+(`ai/prompt.ts`). `setCity`'s uncovered branch is now unreachable (matchCity/list ids are
+always covered) but left as a defensive net. typecheck clean, **84 tests** (tap-Otra →
+otra_ciudad + AI-on + no follow-ups; `esperando_zona` routes to AI; `registrar_zona`
+records zone + queues row + AI off). AI turns are mocked in `conversation.test.ts`.
+
+**Notes / caveats:**
+- No `mal_lead` on this path — earlier plan dropped per Mariano; `otra_ciudad` alone is
+  terminal, which already suppresses follow-ups.
+- `comment` and `name` (web form fields) still not collected on WhatsApp — out of scope.
+- Capturing the city depends on the model calling `registrar_zona` correctly; the tool +
+  routing are unit-tested, but the model's decision (city vs question vs both) isn't
+  covered by tests (no live API in CI). Watch it in early real traffic.
