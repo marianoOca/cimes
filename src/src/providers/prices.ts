@@ -8,9 +8,14 @@ import * as ws from "../waterservice/client.js";
 import type { PriceMatrix } from "../waterservice/client.js";
 import type { PricedCatalog, PriceProvider } from "./types.js";
 
-function resolveCityListId(city: string): string {
-  const listId = config.CITY_PRICE_LIST_MAP[city.toLowerCase()];
-  if (!listId) throw new Error(`No price list configured for city: ${city}`);
+// City → price list. Per-city exceptions win (e.g. Lobos → PRECIO LOBOS);
+// every other city falls back to PRICE_LIST_DEFAULT_ID (LISTA PRECIOS GENERAL).
+// Never throws on an unmapped city — that's the whole point of the "any BA city
+// is served" model; only a total misconfiguration (no default at all) throws.
+export function resolveCityListId(city: string): string {
+  const listId =
+    config.CITY_PRICE_LIST_MAP[city.toLowerCase()] || config.PRICE_LIST_DEFAULT_ID;
+  if (!listId) throw new Error("No price list configured: set PRICE_LIST_DEFAULT_ID");
   return listId;
 }
 

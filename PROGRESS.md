@@ -414,3 +414,72 @@ records zone + queues row + AI off). AI turns are mocked in `conversation.test.t
 - Capturing the city depends on the model calling `registrar_zona` correctly; the tool +
   routing are unit-tested, but the model's decision (city vs question vs both) isn't
   covered by tests (no live API in CI). Watch it in early real traffic.
+
+## 2026-08-03 — "Otra ciudad" reworked: any BA city, coverage by WaterService (supersedes 2026-07-31)
+
+**Business-logic change:** the shortcut-city list is no longer a coverage gate — it's just
+quick-pick buttons/links. **Any Buenos Aires city is served**; coverage is decided solely by
+WaterService neighbours at the address step (confirmed with Mariano — WaterService resolves
+any city). So the whole **waitlist dead-end is discarded**: "Otra ciudad" now lets the user
+type any city, which is snapped to the closest real BA city, and they **continue the normal
+order flow exactly like a shortcut-city click**. Genuinely-uncovered addresses are caught
+downstream by the existing no-coverage handling (web → `revision_cobertura` manual review;
+backend `/api/orders` → `mal_lead` + 422). Website first, then WhatsApp — both done.
+
+Removed: `POST /api/waitlist` + `src/api/waitlist.ts`; the `registrar_zona` AI tool (canonical
+set back to **5**); the `esperando_zona` stage; the `otra_ciudad` label; `isCoveredCity`;
+website waitlist form + `?waitlist=1`; `coverageNegative` copy. The `isCoveredCity` gates on
+`POST /api/orders` and `POST /api/manual-review` are gone (coverage is the only gate).
+
+Added (single source of truth, `src/src/engine/cities.ts`): `BA_CITIES` (~130 canonical names)
++ `matchCity()` — normalize + hand-rolled Levenshtein nearest, snaps typos ("lujann" → "Luján"),
+keeps unrecognizable input rather than force a bad match. Endpoints: **`GET /api/cities`** (list
+for the website autocomplete) and **`POST /api/resolve-city {text}` → `{city, matched, score}`**
+(snap on submit). The WhatsApp engine calls `matchCity` directly; the free-text fast path now
+snaps against the full BA list. Website: shortcut links + an inline free-text entry (native
+`<datalist>` autocomplete + snap on Enter/Continue → `/alta/?city=<slug>`); boot resolves a
+non-shortcut slug via `/api/resolve-city`.
+
+**Pricing (now):** deterministic by city — **`PRICE_LIST_DEFAULT_ID`** (LISTA PRECIOS GENERAL)
+for everyone, `CITY_PRICE_LIST_MAP` for per-city exceptions (Lobos → PRECIO LOBOS). `resolveCityListId`
+no longer throws; product step + `/api/orders` price by this rule, **not** the neighbour-derived
+list (so shown == charged). Set `PRICE_LIST_DEFAULT_ID` + `CITY_PRICE_LIST_MAP={"lobos":"<id>"}`
+in `.env` with the real WS `lista_id`s. **Deferred:** `PRECIO CAMPANA ESPECIAL` (frío/calor) +
+the new "add a frío-calor dispenser" step between city and product — separate plan.
+
+typecheck clean, **82 tests** (added `cities.test.ts`; updated conversation/website; removed the
+waitlist/registrar_zona/esperando_zona tests). Shortcut cities stay 8 (incl. Escobar). Docs
+00/01/02/04 updated to match. **Chatwoot (user-managed):** drop `otra_ciudad` from the label set
+(`ops/chatwoot/WIRING.md`).
+
+## 2026-08-03 — "Otra ciudad": second thought on unknown cities (website)
+
+Follow-up to the rework above. The unknown-city path was still broken: `snap()` redirected on
+any resolve result (ignoring `matched`), but boot's `resolveCityFromSlug` honored `matched` and
+returned null for an unknown slug — so a real non-place (e.g. `monte chico`) redirected to
+`/alta/?city=monte-chico` and then **bounced back to the picker**. Fixed by making the list
+advisory at the UI too, and giving the user a **second thought** instead of a dead end:
+
+- **`matchCity` now returns `suggestions`** (`engine/cities.ts`) — the **1–3 closest** real BA cities
+  (the winner plus any near-equal within `SUGGESTION_BAND`, so "montecito" surfaces both Monte Hermoso
+  and Monte Grande), set in **every** branch (a single `[city]` on a match, `[]` only for empty input);
+  the closest was computed then discarded below the floor before. `POST /api/resolve-city` returns them
+  verbatim (no handler change); the dev stub inherits them.
+- **Website `snap()` branches on `matched`** (`website/app.js`): recognized → redirect to the
+  canonical city (unchanged); unrecognized → **no redirect**, an inline second thought — one line
+  ("No encontramos «…». ¿Quisiste decir…?") then the 1–3 closest cities as `.city-option` links + a
+  "Continuar igual con «<typed>»" link — take a suggestion, or proceed with the typed text **as-is**.
+  Coverage still decides; a non-place fails at step 4 → `revision_cobertura` (saved for the future).
+  The "Otra ciudad" **Continuar is disabled until a city is typed, and stays disabled after a submit**
+  (no re-click on the same text; editing the field re-enables it).
+- **Boot stops bouncing** unknown slugs: `resolveCityFromSlug` returns `deslug(slug)` on a
+  `matched:false` answer, so a direct `/alta/?city=<unknown>` proceeds into the wizard.
+- Copy: `cityStep.notInList/didYouMean/proceedAnyway` (`copy.es-AR.js`).
+
+typecheck clean, **90 tests** (cities: `suggestions` incl. the `monte chico` / `montecito`
+regressions; website: unknown-city second thought with 1–3 options, unknown-slug proceeds,
+Continuar disabled until typed + stays disabled after submit, matched → no nudge). Docs 01/04 updated.
+
+**Scope:** website only — WhatsApp mirror deferred. **Known gap (pre-existing):** a typed unknown
+city that *passes* coverage reaches dispatch with `centroDistribucionId: 0` (unmapped
+`WS_CENTRO_DISTRIBUCION_MAP`, `pipeline/dispatch.ts`) — rare; separate follow-up.

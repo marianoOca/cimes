@@ -58,7 +58,12 @@ const envSchema = z.object({
   DEBT_REMINDER_SEND_HOUR: z.coerce.number().default(9),
 
   // core-api — prices
+  // Price list is deterministic by city: PRICE_LIST_DEFAULT_ID (LISTA PRECIOS
+  // GENERAL) for everyone, with CITY_PRICE_LIST_MAP holding per-city exceptions
+  // (e.g. {"lobos":"<id>"} for PRECIO LOBOS). Coverage still comes from
+  // WaterService neighbors; the neighbor-derived list is not used for pricing.
   CITY_PRICE_LIST_MAP: jsonRecord({}),
+  PRICE_LIST_DEFAULT_ID: z.string().default(""),
   // PRICES_SOURCE is a genuinely open item (00-master §10a): no default forced.
   PRICES_SOURCE: z.enum(["waterservice", "sheet"]).optional(),
   PRICES_SHEET_ID: z.string().default(""),

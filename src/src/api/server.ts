@@ -9,12 +9,11 @@ import { getOrder, updatePendingOrder } from "../db/orders.js";
 import { getPriceProvider } from "../ai/tools.js";
 import { createGeocodingProvider } from "../providers/geocoding.js";
 import { handleInbound } from "../engine/conversation.js";
-import { isCoveredCity } from "../engine/coverage.js";
+import { BA_CITIES, matchCity } from "../engine/cities.js";
 import { normalizeInbound, verifyKapsoSignature } from "../kapso/webhook.js";
 import { sendText } from "../kapso/send.js";
 import { confirmOrder, maybeSendWebConfirmation } from "../pipeline/orders.js";
 import { handleInstagramLead, verifyMetaSignature } from "./instagram.js";
-import { recordWaitlistLead } from "./waitlist.js";
 import { recordManualReviewLead } from "./manual-review.js";
 import { resolveCartLines } from "./orders-cart.js";
 
@@ -43,6 +42,16 @@ export function buildServer(db: DB): FastifyInstance {
     const { city } = z.object({ city: z.string().min(1) }).parse(req.query);
     const catalog = await getPriceProvider().getCatalog(city);
     return { city, price_list: catalog.price_list, products: catalog.products };
+  });
+
+  // Full BA-city list for the website's "Otra ciudad" autocomplete dropdown.
+  app.get("/api/cities", async () => ({ cities: BA_CITIES }));
+
+  // Snap free-typed text to the closest BA city (website submit / Enter). The
+  // WhatsApp engine calls matchCity directly; this is the web entry point.
+  app.post("/api/resolve-city", async (req) => {
+    const { text } = z.object({ text: z.string().min(1) }).parse(req.body);
+    return matchCity(text);
   });
 
   const geocoding = createGeocodingProvider();
@@ -87,49 +96,11 @@ export function buildServer(db: DB): FastifyInstance {
     };
   });
 
-  // Out-of-coverage waitlist (04-website §5): the "Otra ciudad" form leaves a
-  // contact so the operator reaches out when the zone is added. Records a lead
-  // labeled `otra_ciudad` + a sheet row; no order pipeline, no coverage check.
-  app.post("/api/waitlist", async (req) => {
-    const body = z
-      .object({
-        source: z.literal("web").default("web"),
-        name: z.string().min(1),
-        phone: z.string().min(5),
-        city: z.string().min(1),
-        comment: z.string().default(""),
-        // Paid-social attribution (optional; captured client-side from the ad click).
-        utm_source: z.string().optional(),
-        utm_medium: z.string().optional(),
-        utm_campaign: z.string().optional(),
-        utm_content: z.string().optional(),
-        utm_term: z.string().optional(),
-        fbclid: z.string().optional(),
-        gclid: z.string().optional(),
-      })
-      .parse(req.body);
-    recordWaitlistLead(db, {
-      name: body.name,
-      phone: body.phone,
-      city: body.city,
-      comment: body.comment,
-      attribution: {
-        utm_source: body.utm_source,
-        utm_medium: body.utm_medium,
-        utm_campaign: body.utm_campaign,
-        utm_content: body.utm_content,
-        utm_term: body.utm_term,
-        fbclid: body.fbclid,
-        gclid: body.gclid,
-      },
-    });
-    return { ok: true };
-  });
-
-  // Covered-city / no-delivery-time capture (04-website §5): the website calls this when
-  // /api/coverage comes back with zero offerable times in a covered city. Saves the lead
-  // and hands it to a human (AI off, `revision_cobertura`, Chatwoot + operator ping).
-  app.post("/api/manual-review", async (req, reply) => {
+  // No-delivery-time capture (04-website §5): the website calls this when
+  // /api/coverage comes back with zero offerable times. Saves the lead and hands
+  // it to a human (AI off, `revision_cobertura`, Chatwoot + operator ping). Any
+  // BA city is allowed — coverage, not the city list, is the gate.
+  app.post("/api/manual-review", async (req) => {
     const body = z
       .object({
         source: z.literal("web").default("web"),
@@ -150,8 +121,6 @@ export function buildServer(db: DB): FastifyInstance {
         gclid: z.string().optional(),
       })
       .parse(req.body);
-    // Out-of-city belongs on the waitlist path, not here.
-    if (!isCoveredCity(body.city)) return reply.code(422).send({ error: "city_not_covered" });
     await recordManualReviewLead(db, {
       name: body.name,
       phone: body.phone,
@@ -229,13 +198,6 @@ export function buildServer(db: DB): FastifyInstance {
       });
     }
 
-    // Out-of-city / in-city-no-coverage leads are saved + labeled (01 §4.2).
-    if (!isCoveredCity(body.city)) {
-      updateLead(db, created.lead_id, { city: body.city });
-      addLabel(db, created.lead_id, "otra_ciudad");
-      return reply.code(422).send({ error: "city_not_covered" });
-    }
-
     let lead = updateLead(db, created.lead_id, {
       name: body.name,
       city: body.city,
@@ -246,7 +208,9 @@ export function buildServer(db: DB): FastifyInstance {
       delivery_window: body.delivery_window,
     });
 
-    // Resolve coverage (coords, price list, reparto) for the alta.
+    // Resolve coverage (coords, reparto, delivery days) for the alta. Coverage —
+    // not the city list — is the gate: any BA city is allowed through and stands
+    // or falls on whether WaterService finds serving neighbors.
     const coverage = await geocoding.resolve(
       `Argentina, ${body.city}, ${body.address}`,
       config.COVERAGE_RADIUS_M,
@@ -262,15 +226,16 @@ export function buildServer(db: DB): FastifyInstance {
       addLabel(db, lead.lead_id, "mal_lead");
       return reply.code(422).send({ error: "address_not_covered" });
     }
-    lead = updateLead(db, lead.lead_id, {
-      coverage_json: JSON.stringify(coverage),
-      price_list: coverage.price_list ?? "",
-    });
 
-    // Prices from the resolved list, never client-supplied. Multi-item cart is
+    // Prices are deterministic by city (GENERAL / per-city exception), never the
+    // neighbor-derived list and never client-supplied. Multi-item cart is
     // summarized to one line ("2x A, 1x B") + total; a single legacy `product`
     // becomes a one-line, qty-1 cart.
-    const catalog = await getPriceProvider().getPricesForList(coverage.price_list!);
+    const catalog = await getPriceProvider().getCatalog(body.city);
+    lead = updateLead(db, lead.lead_id, {
+      coverage_json: JSON.stringify(coverage),
+      price_list: catalog.price_list,
+    });
     const cartItems = body.items ?? [{ product: body.product!, qty: 1 }];
     const cart = resolveCartLines(catalog, cartItems);
     if (!cart.ok) return reply.code(422).send({ error: cart.error });

@@ -14,8 +14,6 @@ export const copy = {
     `${product} te sale $${formatPrice(price)}. ¿Querés que te lo llevemos?`,
   requote: (product: string, price: number): string =>
     `Un detalle: por tu zona, ${product} te queda en $${formatPrice(price)}.`,
-  coverageNegative:
-    "Uy, por ahora no llegamos a tu zona 😔. Igual guardamos tu contacto y te avisamos si sumamos reparto por ahí. ¡Gracias por escribirnos!",
   coverageNegativeInCity:
     "No encontramos reparto para esa dirección todavía. Lo pasamos al equipo para revisarlo y te avisamos, ¿dale?",
   deliveryDataPrompt:

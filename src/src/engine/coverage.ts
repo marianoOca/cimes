@@ -9,6 +9,9 @@ import { createGeocodingProvider } from "../providers/geocoding.js";
 import type { CoverageResult } from "../providers/types.js";
 import { notifyOperator } from "./notify.js";
 
+// Shortcut cities: the quick-pick buttons/links shown first. NOT a coverage
+// gate — any BA city is served if WaterService finds serving neighbors. Free
+// text outside this list snaps to the full BA_CITIES set (engine/cities.ts).
 export const COVERED_CITIES = [
   "mercedes",
   "luján",
@@ -17,17 +20,8 @@ export const COVERED_CITIES = [
   "chivilcoy",
   "campana",
   "zárate",
+  "Escobar",
 ];
-
-export function isCoveredCity(city: string): boolean {
-  const normalized = city
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "");
-  return COVERED_CITIES.some(
-    (c) => c.normalize("NFD").replace(/[̀-ͯ]/g, "") === normalized,
-  );
-}
 
 const geocoding = { provider: createGeocodingProvider() };
 

@@ -6,9 +6,10 @@ import { emitEvent } from "../db/events.js";
 import { addLabel, getLeadById, updateLead } from "../db/leads.js";
 import { runCoverageForLead } from "../engine/coverage.js";
 import { triggerHandoff } from "../engine/handoff.js";
-import { enqueue } from "../jobs/queue.js";
 import { confirmOrder } from "../pipeline/orders.js";
 import { createPriceProvider } from "../providers/prices.js";
+// (registrar_zona removed — the "Otra ciudad" waitlist flow is gone; any BA city
+// flows through the normal order path and coverage is decided by WaterService.)
 import type { PriceProvider } from "../providers/types.js";
 
 export interface ToolContext {
@@ -83,16 +84,6 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       required: ["reason"],
     },
   },
-  {
-    name: "registrar_zona",
-    description:
-      "Records the out-of-coverage city/zone a user named so an operator can follow up when we expand there. Call ONLY when the lead is outside our 7 covered cities (stage 'esperando_zona') and the user tells you their city/zone. Ends the waitlist flow and turns the bot off; after calling it, thank the user and tell them we don't reach that area yet but will contact them when we do.",
-    input_schema: {
-      type: "object",
-      properties: { zona: { type: "string", description: "City/zone the user named" } },
-      required: ["zona"],
-    },
-  },
 ];
 
 export async function runTool(
@@ -110,9 +101,8 @@ export async function runTool(
       case "get_prices": {
         const city = String(input.city ?? lead.city);
         if (city && city !== lead.city) updateLead(db, leadId, { city });
-        const catalog = lead.price_list
-          ? await getPriceProvider().getPricesForList(lead.price_list)
-          : await getPriceProvider().getCatalog(city);
+        // Prices are deterministic by city (GENERAL / per-city exception).
+        const catalog = await getPriceProvider().getCatalog(city);
         // Asking prices marks the lead interesado (00-master §5.3).
         if (addLabel(db, leadId, "interesado")) {
           emitEvent(db, {
@@ -159,21 +149,6 @@ export async function runTool(
       case "handoff": {
         await triggerHandoff(db, lead, String(input.reason ?? "ai_request"), ctx.phoneNumberId);
         return "handoff done — the user was told where to write; do not keep selling";
-      }
-      case "registrar_zona": {
-        const zona = String(input.zona ?? "").trim() || lead.city;
-        // Store the zone, keep the lead off (no more auto-replies / follow-ups), and
-        // queue the same waitlist sheet row the website's "Otra ciudad" form does.
-        updateLead(db, leadId, { city: zona, ai_enabled: false });
-        addLabel(db, leadId, "otra_ciudad"); // idempotent — already tagged at "Otra" click
-        enqueue(
-          db,
-          "sheet_append_order",
-          new Date(),
-          { lead_id: leadId, order_id: null, label: "otra_ciudad" },
-          `sheet_waitlist:${leadId}`,
-        );
-        return "zona registrada. Agradecé al usuario, decile que todavía no llegamos a esa zona pero que lo vamos a contactar cuando lleguemos, y despedite. No sigas vendiendo ni pidas más datos.";
       }
       default:
         return `error: unknown tool ${name}`;

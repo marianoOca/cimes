@@ -5,7 +5,6 @@ import type { DB } from "./db.js";
 export type Source = "whatsapp" | "web" | "instagram";
 export type Stage =
   | "inicio"
-  | "esperando_zona"
   | "producto"
   | "datos_entrega"
   | "confirmar_ubicacion"
@@ -29,7 +28,6 @@ export type TerminalLabel =
   | "cliente_cerrado"
   | "pedido_cerrado"
   | "mal_lead"
-  | "otra_ciudad"
   | "derivado"
   | "revision_cobertura";
 
@@ -172,7 +170,6 @@ export function hasTerminalLabel(lead: Lead): boolean {
     "cliente_cerrado",
     "pedido_cerrado",
     "mal_lead",
-    "otra_ciudad",
     "derivado",
     "revision_cobertura",
   ];

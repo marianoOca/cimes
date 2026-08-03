@@ -1,7 +1,8 @@
 // Flow B (website), covered-city / no-delivery-time capture (04-website §5): a visitor
 // whose covered-city address has no serviceable route (no time we can offer) is saved as
 // a lead and handed to a human via `enterManualReview` (AI off, `revision_cobertura`,
-// Chatwoot + operator ping). Distinct from `otra_ciudad` (out-of-city waitlist).
+// Chatwoot + operator ping). Any BA city can land here now — coverage is decided
+// by WaterService neighbours at the address step, not by a city list.
 import type { DB } from "../db/db.js";
 import { emitEvent } from "../db/events.js";
 import { getOrCreateLead, updateLead } from "../db/leads.js";

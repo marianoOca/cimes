@@ -103,7 +103,7 @@ inicio → producto → datos_entrega → dia_entrega → confirmacion → clien
 
 | Stage | What the user does | WhatsApp primitive | Free-text fast path |
 |---|---|---|---|
-| `inicio` | Greeted; asked for **city** | Interactive **list** — the 7 cities + "Otra" (8 items ≤ 10-item limit ✅) | If the first message already states the city (and maybe product), AI extracts it and the engine skips ahead. "Otra"/uncovered city → label `otra_ciudad`, polite no-coverage copy, end. |
+| `inicio` | Greeted; asked for **city** | Interactive **list** — the 8 shortcut cities + "Otra" (9 items ≤ 10-item limit ✅) | If the first message already states the city (and maybe product), AI extracts it and the engine skips ahead. **Any BA city is accepted:** "Otra" asks "¿en qué ciudad?" (reusing `zonePrompt`) and **stays at the city step**; the free-text reply is snapped to the closest BA city (`matchCity`) and the flow continues to `producto`. |
 | `producto` | Picks a **product**; gets an **immediate quote** | **Buttons** if ≤ 3 products, else **list** (≤ 10). Catalog: bidón 12L, bidón 20L, soda, saborizadas, dispenser frío-calor, dispenser natural → **use a list** (>3 items). | If product already free-typed, skip the picker; AI quotes directly. Prices come ONLY from `get_prices(city)`, that city's list only (`00-master.md` §6). |
 | `datos_entrega` | Fills delivery data | **Kapso-hosted form**: `nombre`, `apellido`, `calle`, `altura`, `entre calles`, `notas` (optional). Pre-fill `nombre`/`apellido` from WhatsApp profile / IG form when it looks real. | User may free-type the address instead; AI extracts and fills the same fields. |
 | `dia_entrega` | Picks a **delivery day** | **Buttons/list** of available options, each showing route + weekday + time window, e.g. **"Reparto 19 — sábado entre 10 y 13"**. Options come from `get_delivery_options(address)` (→ coverage/#12). **≤ 3 → buttons; up to 10 → list; >10 → list of the soonest 10 or "escribime qué día te queda mejor" free text.** | User may free-type a day preference; AI maps it to an offered option (never invents a day not returned by the tool). |
@@ -111,7 +111,7 @@ inicio → producto → datos_entrega → dia_entrega → confirmacion → clien
 | `cliente_cerrado` | — (terminal) | Confirmation message sent (copy module). | — |
 
 Notes:
-- Between `producto` and `dia_entrega` the engine runs the coverage check. **No-coverage result** → polite copy + label `mal_lead`/`otra_ciudad` per `01-core-api.md`; operator notified for genuinely new zones. (Coverage-check business logic is in `01-core-api.md`; the negative-result *copy* is in the copy module, §10.)
+- Between `producto` and `dia_entrega` the engine runs the coverage check. **No-coverage result** (no serving neighbours, any city) → the **manual-review handoff**: label `revision_cobertura`, `ai_enabled=false`, operator notified (`01-core-api.md §4.5/§9`). (Coverage-check business logic is in `01-core-api.md`.)
 - Stage transitions, `stage_entered` events, and the dynamic label `{stage}:{followup_count}` are all handled by `01-core-api.md`. This module only renders the right primitive for the current stage.
 
 ---
@@ -186,15 +186,15 @@ Handoff also sets the shared **`ai_enabled = false`** field (`00-master.md` §5.
 
 **Every user-facing string lives here.** Argentine Spanish, **voseo**, warm, short. Never hardcode a Spanish string inline in logic (`00-master.md` §2 hard rule). Other modules that need copy (website, CRM labels) import from this module — this doc owns it.
 
-Copy surfaces this module must define (one entry each; follow-ups and coverage-negative are stage/case keyed):
+Copy surfaces this module must define (one entry each; follow-ups are stage keyed):
 
 | Surface | Notes |
 |---|---|
 | `greeting` | Opening message (Flow A `inicio`). |
 | `cityPrompt` | Ask for city (accompanies the city list). |
+| `zonePrompt` | Ask "¿en qué ciudad?" as free text after the user taps "Otra" at `inicio`; the reply is snapped to the closest BA city (§5). |
 | `productPrompt` | Ask for product (accompanies the product buttons/list). |
 | `quote` | Price quote template — interpolates product + price for the resolved city. |
-| `coverageNegative` | Out-of-coverage / "otra ciudad" polite no. |
 | `deliveryDataPrompt` | Intro to the Kapso-hosted delivery-data form. |
 | `deliveryDayPrompt` | Ask which day (accompanies the day buttons/list). |
 | `orderSummaryConfirm` | Order summary + confirm prompt (product, price, address, day + window). |
@@ -231,7 +231,7 @@ Keep strings short and tappable-friendly. Voseo throughout ("escribime", "queré
 
 ### Tools (function calling) — canonical names (`00-master.md` §5.5)
 
-Thin wrappers over core-api providers/endpoints. Exact signatures/impl in `01-core-api.md`; the model sees these:
+Thin wrappers over core-api providers/endpoints. Exact signatures/impl in `01-core-api.md`; the model sees these **five**:
 
 | Tool | Purpose |
 |---|---|
@@ -240,7 +240,6 @@ Thin wrappers over core-api providers/endpoints. Exact signatures/impl in `01-co
 | `get_delivery_options(address)` | Returns available delivery-day options (route + weekday + time window). |
 | `confirm_order(order)` | Fires the order pipeline (`POST /api/orders`): WaterService client #6 + contact #7 + driver ticket #3 + sheet row + label `cliente_cerrado`. Idempotent per lead. |
 | `handoff(reason)` | Sets `ai_enabled=false`, sends the tell-user-to-write-support copy, notifies operator (§9). |
-| `registrar_zona(zona)` | Out-of-coverage "Otra ciudad" path only (stage `esperando_zona`): records the city/zone (label `otra_ciudad` + orders-sheet lead row, WhatsApp equivalent of `POST /api/waitlist`) and sets `ai_enabled=false`. The AI stays on during the wait to field questions and captures the zone conversationally; on capture it thanks the user and says we'll contact them when we expand there. |
 
 Structured steps (city/product/day/confirm) are **deterministic UI** (buttons/lists/form), not free-text parsing. The AI handles **FAQs, glue, and free-text extraction** (§4).
 

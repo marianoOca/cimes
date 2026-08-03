@@ -316,6 +316,7 @@
   //  else -> provincial (Mercedes/Luján/etc.): 4-digit area, 6-digit local
   // All three Buenos Aires spellings (11/15/011) save to the same E.164 area "11".
   function phoneModeOf(arDigits) {
+    if (arDigits.startsWith("0348")) return { areaLen: 4, localLen: 7 }; // Escobar: 4-digit "0348" area, 7-digit local
     if (arDigits[0] === "0") return { areaLen: 3, localLen: 8 };
     if (arDigits[0] === "1") return { areaLen: 2, localLen: 8 };
     return { areaLen: 4, localLen: 6 };
@@ -361,7 +362,7 @@
     if (!phoneIsAR(digits)) return "+" + digits;
     const arDigits = digits.slice(3);
     const { areaLen, localLen } = phoneModeOf(arDigits);
-    const area = areaLen === 4 ? arDigits.slice(0, 4) : "11";
+    const area = areaLen === 4 ? arDigits.slice(0, 4).replace(/^0/, "") : "11"; // drop Escobar trunk 0 ("0348" -> "348")
     const local = arDigits.slice(areaLen, areaLen + localLen);
     return "+549" + area + local;
   }
@@ -443,6 +444,45 @@
     const s = String(slug || "").toLowerCase();
     return COPY.coverage.cities.find((c) => citySlug(c) === s) || null;
   }
+  // Full BA-city list for the "Otra ciudad" autocomplete (fetched once).
+  let baCities = null;
+  async function fetchCities() {
+    if (baCities) return baCities;
+    try {
+      const res = await fetch(`${API}/api/cities`);
+      baCities = res.ok ? (await res.json()).cities || [] : [];
+    } catch {
+      baCities = [];
+    }
+    return baCities;
+  }
+  // Turn a URL slug back into a human city label ("monte-chico" -> "Monte Chico"),
+  // so an unrecognized ?city carries into the wizard as-is (proceed-anyway) rather
+  // than bouncing the visitor to the picker.
+  function deslug(slug) {
+    return String(slug || "")
+      .replace(/-/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+  // Snap a non-shortcut ?city slug to a canonical BA city (boot on /alta). An
+  // unrecognized slug is carried through de-slugged (proceed-anyway); only a
+  // failed request falls back to the picker (null).
+  async function resolveCityFromSlug(slug) {
+    try {
+      const res = await fetch(`${API}/api/resolve-city`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: String(slug).replace(/-/g, " ") }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.matched ? data.city : deslug(slug);
+    } catch {
+      return null;
+    }
+  }
   // Carry captured attribution onto the /alta link so a new-tab open keeps it.
   function utmQS() {
     const parts = Object.keys(attribution).map(
@@ -465,7 +505,6 @@
     if (/soda|sifon/.test(s)) return img("soda-sifon.webp");
     if (/saboriz/.test(s)) return img("saborizada.webp");
     if (/gaseosa/.test(s)) return img("gaseosas.webp");
-    if (/jugo|polvo/.test(s)) return img("jugo.webp");
     if (/12/.test(s) && /sodio|menos|\bms\b/.test(s)) return img("botellon-12l-ms.webp");
     if (/20/.test(s)) return img("botellon-20l.webp");
     if (/12/.test(s)) return img("botellon-12l.webp");
@@ -709,98 +748,188 @@
   }
 
   const steps = {
-    // 1. City select.
+    // 1. City select. Shortcut cities are real links to the focused /alta page.
+    // "Otra Ciudad" is the last option and looks identical to the rest; clicking
+    // it turns that same slot into an inline text input and reveals the submit
+    // button. Enter or the button snaps the typed city to the closest real BA
+    // city and continues the normal flow — coverage is decided later.
     city() {
       track("wizard_step", { step: "city", n: 1 });
-      // City options are real links to the focused /alta page (city in the URL).
+      const c = W.cityStep;
       root.innerHTML =
         progress(1) +
-        `<h3>${W.cityStep.title}</h3><div class="option-list">` +
+        `<h3>${c.title}</h3><div class="option-list">` +
         COPY.coverage.cities
-          .map((c) => `<a class="city-option" href="/alta/?city=${citySlug(c)}${utmQS()}">${esc(c)}</a>`)
+          .map((city) => `<a class="city-option" href="/alta/?city=${citySlug(city)}${utmQS()}">${esc(city)}</a>`)
           .join("") +
-        // "Otra ciudad" navigates to the waitlist form (uncovered-zone lead capture).
-        `<a class="city-option city-option-other" href="/alta/?waitlist=1${utmQS()}">${W.cityStep.other}</a></div>`;
-    },
-
-    // Waitlist form for uncovered zones (reached via /alta?waitlist=1 or the
-    // homepage "Otra ciudad" link). Captures contact and POSTs to /api/waitlist.
-    waitlist() {
-      track("wizard_step", { step: "waitlist" });
-      const w = W.waitlist;
-      const e = W.dataStep.errors;
-      const prev = state.waitlist || {};
-      const field = (id, label, value, attrs) =>
-        `<div class="field" data-field="${id}"><label for="${id}">${label}</label>` +
-        `<input id="${id}" value="${esc(value || "")}" ${attrs || ""} />` +
-        `<span class="error">${e.required}</span></div>`;
-      // No known city here, so the phone field starts at the bare "+54 9" default.
-      const phone = phoneField("wl-phone", w.phone, prev.phone ? phoneDigitsFromE164(prev.phone) : "549");
-      root.innerHTML =
-        `<h3>${w.title}</h3>` +
-        `<p class="wizard-intro">${esc(w.intro)}</p>` +
-        field("wl-name", w.name, prev.name, 'autocomplete="name" autocapitalize="words"') +
-        phone.html +
-        field("wl-zone", w.zone, prev.zone, `autocapitalize="words" placeholder="${esc(w.zonePlaceholder)}"`) +
-        field("wl-comment", w.comment, prev.comment, "") +
-        `<div class="wizard-actions"><button class="btn btn-secondary" data-back="city">${W.back}</button>` +
-        `<button class="btn btn-primary" id="wl-submit">${w.submit}</button></div>`;
-      bindBack();
-      const phoneApi = phone.bind();
-      const submitBtn = document.getElementById("wl-submit");
-      submitBtn.addEventListener("click", async () => {
-        if (state.submitting) return;
-        const required = { "wl-name": true, "wl-zone": true, "wl-comment": false };
-        const values = {};
-        let ok = true;
-        for (const id of Object.keys(required)) {
-          const wrap = root.querySelector(`[data-field="${id}"]`);
-          const input = wrap.querySelector("input");
-          const errorEl = wrap.querySelector(".error");
-          const val = input.value.trim();
-          values[id] = val;
-          const bad = required[id] && val === "";
-          errorEl.textContent = e.required;
-          wrap.classList.toggle("invalid", bad);
-          if (bad) ok = false;
-        }
-        if (!phoneApi.isComplete()) {
-          phoneApi.markInvalid(e.phone);
-          ok = false;
-        }
-        if (!ok) return;
-        state.waitlist = { ...values, phone: phoneApi.toE164() };
+        `<button type="button" class="city-option" id="city-other">${esc(c.other)}</button>` +
+        `</div>` +
+        `<button class="btn btn-primary" id="city-other-submit" hidden>${c.otherSubmit}</button>`;
+      // Warm the BA-city list for the autocomplete (filtered client-side on type).
+      fetchCities();
+      const submit = document.getElementById("city-other-submit");
+      const clearSecondThought = () => {
+        const old = document.getElementById("city-second-thought");
+        if (old) old.remove();
+      };
+      // Inline "did you mean?" nudge for an unrecognized city. The 1–3 closest
+      // cities and "continuar igual" are all real links, like the shortcut cities:
+      // a suggestion snaps to that canonical city; "continuar igual" carries the
+      // typed text as-is into the wizard, where coverage decides. Never a dead end.
+      const renderSecondThought = (typed, suggestions) => {
+        clearSecondThought();
+        const list = Array.isArray(suggestions) ? suggestions : [];
+        const box = document.createElement("div");
+        box.id = "city-second-thought";
+        box.className = "city-second-thought";
+        box.innerHTML =
+          `<p class="status-msg">${esc(c.notInList(typed))}${list.length ? " " + esc(c.didYouMean) : ""}</p>` +
+          `<div class="option-list">` +
+          list
+            .map((city, i) => `<a class="city-option" id="city-did-you-mean-${i}" href="/alta/?city=${citySlug(city)}${utmQS()}">${esc(city)}</a>`)
+            .join("") +
+          `<a class="city-option" id="city-proceed-anyway" href="/alta/?city=${citySlug(typed)}${utmQS()}">${esc(c.proceedAnyway(typed))}</a>` +
+          `</div>`;
+        submit.insertAdjacentElement("afterend", box);
+        // Focus the safe default (the closest city) so Enter takes it; fall back to
+        // proceed-anyway when there are no suggestions (e.g. empty city list).
+        (document.getElementById("city-did-you-mean-0") || document.getElementById("city-proceed-anyway")).focus();
+      };
+      const snap = async (text) => {
+        const t = String(text || "").trim();
+        if (!t || state.submitting) return;
         state.submitting = true;
-        submitBtn.disabled = true;
-        submitBtn.textContent = w.sending;
+        submit.disabled = true;
+        clearSecondThought();
         try {
-          const payload = {
-            source: "web",
-            name: values["wl-name"],
-            phone: phoneApi.toE164(),
-            city: values["wl-zone"],
-            comment: values["wl-comment"],
-          };
-          // Attach paid-social attribution (empty object when none captured).
-          Object.assign(payload, attribution);
-          const res = await fetch(`${API}/api/waitlist`, {
+          const res = await fetch(`${API}/api/resolve-city`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ text: t }),
           });
-          if (!res.ok) throw new Error("waitlist failed");
-          await res.json();
-          track("waitlist_submitted", { zone: values["wl-zone"] });
-          root.innerHTML =
-            `<h3>${w.successTitle}</h3>` +
-            `<p class="status-msg success">${esc(w.success)}</p>` +
-            `<div class="wizard-actions"><a class="btn btn-whatsapp" data-wa-loc="waitlist_success" target="_blank" rel="noopener" href="${waHref}">${W.waFallback}</a></div>`;
+          if (!res.ok) throw new Error("resolve failed");
+          const { city, matched, suggestions } = await res.json();
+          track("city_other_resolved", { typed: t, city, matched });
+          if (matched) {
+            // Recognized (exact or typo within the match floor): continue exactly
+            // like a shortcut click, canonical city in the URL.
+            window.location.href = `/alta/?city=${citySlug(city)}${utmQS()}`;
+            return;
+          }
+          // Unrecognized: give the user a second thought instead of a broken URL —
+          // offer the closest cities, but let them proceed with what they typed.
+          // Keep Continuar disabled so it can't be re-clicked on the same text; it
+          // re-enables only when the user edits the input (the combobox listener).
+          state.submitting = false;
+          renderSecondThought(t, suggestions);
         } catch {
           state.submitting = false;
-          submitBtn.disabled = false;
-          submitBtn.textContent = w.submit;
+          submit.disabled = false;
           alert(W.genericError);
         }
+      };
+      // First click on "Otra Ciudad": swap the option for an identically styled
+      // combobox — a text input plus a custom suggestions dropdown that matches
+      // the rest of the UI (the native <datalist> can't be styled) — and reveal
+      // the submit button (stays until reload).
+      document.getElementById("city-other").addEventListener("click", () => {
+        const box = document.createElement("div");
+        box.className = "city-combobox";
+        const input = document.createElement("input");
+        input.id = "city-other-input";
+        input.className = "city-option"; // same box + text format as the options
+        input.setAttribute("autocomplete", "off");
+        input.setAttribute("autocapitalize", "words");
+        input.setAttribute("role", "combobox");
+        input.setAttribute("aria-autocomplete", "list");
+        input.setAttribute("aria-expanded", "false");
+        input.setAttribute("aria-controls", "city-suggestions");
+        input.setAttribute("aria-label", c.other);
+        input.placeholder = c.otherPlaceholder; // example, shown in grey
+        const menu = document.createElement("ul");
+        menu.id = "city-suggestions";
+        menu.className = "city-suggestions";
+        menu.setAttribute("role", "listbox");
+        box.appendChild(input);
+        box.appendChild(menu);
+        document.getElementById("city-other").replaceWith(box);
+        submit.hidden = false;
+        submit.disabled = true; // blocked until the user actually types a city
+        input.focus();
+
+        let items = [];
+        let active = -1;
+        const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+        const close = () => {
+          menu.innerHTML = "";
+          items = [];
+          active = -1;
+          input.setAttribute("aria-expanded", "false");
+          input.removeAttribute("aria-activedescendant");
+        };
+        const setActive = (i) => {
+          const lis = menu.querySelectorAll("li");
+          lis.forEach((li) => li.classList.remove("is-active"));
+          active = i;
+          if (i >= 0 && lis[i]) {
+            lis[i].classList.add("is-active");
+            lis[i].scrollIntoView({ block: "nearest" });
+            input.setAttribute("aria-activedescendant", `city-sug-${i}`);
+          } else {
+            input.removeAttribute("aria-activedescendant");
+          }
+        };
+        const render = () => {
+          const q = norm(input.value);
+          const all = baCities || [];
+          items = q
+            ? all
+                .filter((city) => norm(city).includes(q))
+                .sort((a, b) => Number(norm(b).startsWith(q)) - Number(norm(a).startsWith(q)))
+                .slice(0, 8)
+            : [];
+          active = -1;
+          menu.innerHTML = items
+            .map((city, i) => `<li role="option" id="city-sug-${i}" data-i="${i}">${esc(city)}</li>`)
+            .join("");
+          input.setAttribute("aria-expanded", items.length ? "true" : "false");
+        };
+        const pick = (city) => {
+          input.value = city;
+          close();
+          snap(city);
+        };
+        input.addEventListener("input", () => {
+          submit.disabled = !input.value.trim(); // enable Continuar only with real text
+          render();
+        });
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "ArrowDown" && items.length) {
+            e.preventDefault();
+            setActive((active + 1) % items.length);
+          } else if (e.key === "ArrowUp" && items.length) {
+            e.preventDefault();
+            setActive((active - 1 + items.length) % items.length);
+          } else if (e.key === "Enter") {
+            e.preventDefault(); // Enter == submit, or pick the highlighted suggestion
+            if (active >= 0 && items[active]) pick(items[active]);
+            else snap(input.value);
+          } else if (e.key === "Escape") {
+            close();
+          }
+        });
+        // mousedown fires before the input's blur, so the pick isn't cancelled.
+        menu.addEventListener("mousedown", (e) => {
+          const li = e.target.closest && e.target.closest("li[data-i]");
+          if (!li) return;
+          e.preventDefault();
+          pick(items[Number(li.dataset.i)]);
+        });
+        input.addEventListener("blur", () => setTimeout(close, 120));
+      });
+      submit.addEventListener("click", () => {
+        const input = document.getElementById("city-other-input");
+        if (input) snap(input.value);
       });
     },
 
@@ -1100,34 +1229,35 @@
     },
   };
 
-  // Boot (both pages, no mode flag): ?waitlist → waitlist form; ?city present →
-  // product/resume; absent → picker.
+  // Resume the furthest reached step for a known city (04 §3 state handling).
+  function startWizard(city) {
+    state.city = city;
+    track("wizard_start", { city });
+    const saved = loadState();
+    if (saved && saved.city === city) {
+      state.cart = saved.cart || null;
+      state.data = saved.data || null;
+      state.option = saved.option || null;
+      const hasCart = state.cart && state.cart.length;
+      if (hasCart && state.data && state.option) steps.summary();
+      else if (hasCart && state.data) steps.day();
+      else if (hasCart) steps.data();
+      else steps.product();
+    } else {
+      steps.product();
+    }
+  }
+
+  // Boot (both pages): ?city present → resume/product; absent → picker. A slug
+  // that isn't one of the shortcut cities is snapped against the full BA list.
   if (root) {
-    const params = new URLSearchParams(window.location.search);
-    const urlCity = (() => {
-      const slug = params.get("city");
-      return slug ? slugToCity(slug) : null;
-    })();
-    if (params.get("waitlist")) {
-      steps.waitlist();
-    } else if (!urlCity) {
+    const slug = new URLSearchParams(window.location.search).get("city");
+    if (!slug) {
       steps.city();
     } else {
-      state.city = urlCity;
-      track("wizard_start", { city: urlCity });
-      const saved = loadState();
-      if (saved && saved.city === urlCity) {
-        state.cart = saved.cart || null;
-        state.data = saved.data || null;
-        state.option = saved.option || null;
-        const hasCart = state.cart && state.cart.length;
-        if (hasCart && state.data && state.option) steps.summary();
-        else if (hasCart && state.data) steps.day();
-        else if (hasCart) steps.data();
-        else steps.product();
-      } else {
-        steps.product();
-      }
+      const shortcut = slugToCity(slug);
+      if (shortcut) startWizard(shortcut);
+      else resolveCityFromSlug(slug).then((city) => (city ? startWizard(city) : steps.city()));
     }
   }
 })();

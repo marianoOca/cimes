@@ -77,6 +77,13 @@ function type(dom: JSDOM, id: string, value: string) {
   (dom.window.document.getElementById(id) as HTMLInputElement).value = value;
 }
 
+// Like type(), but also fires the 'input' event (drives the autocomplete filter).
+function typeInto(dom: JSDOM, id: string, value: string) {
+  const el = dom.window.document.getElementById(id) as HTMLInputElement;
+  el.value = value;
+  el.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+}
+
 // The phone field owns its value internally (a masked "+54 9 area local"
 // input) — it only reacts to real keystroke-shaped events, so tests drive it
 // through beforeinput like a real keyboard/paste would, one op at a time.
@@ -109,17 +116,28 @@ function pickProduct(dom: JSDOM, i = 0, qty = 1) {
 
 describe("website: Flow B wizard", () => {
   let orders: unknown[];
-  let waitlists: unknown[];
+
+  // Cities the "Otra ciudad" autocomplete/snap knows about in these tests.
+  const KNOWN_CITIES = ["Necochea", "Navarro", "Tandil", "Lobos"];
 
   function stub(coverage: unknown = coverageOk): Fetch {
     orders = [];
-    waitlists = [];
     return (url: string, init?: RequestInit) => {
       if (url.includes("/api/prices")) return Promise.resolve(catalog);
       if (url.includes("/api/coverage")) return Promise.resolve(coverage);
-      if (url.includes("/api/waitlist")) {
-        waitlists.push(JSON.parse(String(init?.body)));
-        return Promise.resolve({ ok: true });
+      if (url.includes("/api/cities")) return Promise.resolve({ cities: KNOWN_CITIES });
+      if (url.includes("/api/resolve-city")) {
+        const text = String(JSON.parse(String(init?.body)).text || "").trim();
+        const exact = KNOWN_CITIES.find((c) => c.toLowerCase() === text.toLowerCase());
+        const matched = Boolean(exact);
+        // Mirrors matchCity: `suggestions` are always real cities (the 1–3 closest),
+        // even below the floor. The stub returns two fixed ones for unrecognized input.
+        return Promise.resolve({
+          city: matched ? exact : text,
+          matched,
+          score: matched ? 1 : 0,
+          suggestions: matched ? [exact] : ["Necochea", "Navarro"],
+        });
       }
       if (url.includes("/api/manual-review")) return Promise.resolve({ ok: true });
       if (url.includes("/api/orders")) {
@@ -169,26 +187,33 @@ describe("website: Flow B wizard", () => {
     const dom = buildPage(stub());
     const doc = dom.window.document;
     expect(doc.querySelector(".hero h1")!.textContent).toContain("Agua y soda");
-    expect(doc.querySelectorAll("#product-grid .card")).toHaveLength(8);
+    // One card per product in the copy module (derive the count so adding/removing
+    // a product doesn't break this test).
+    const productCount = (dom.window as unknown as { CIMES_COPY: { products: { items: unknown[] } } })
+      .CIMES_COPY.products.items.length;
+    expect(doc.querySelectorAll("#product-grid .card")).toHaveLength(productCount);
     // wa.me deep link with prefilled message on both CTAs + floating widget.
     const wa = doc.querySelector(".wa-float") as HTMLAnchorElement;
     expect(wa.href).toContain("wa.me/5491100000000");
     expect(wa.href).toContain(encodeURIComponent("Hola, quiero darme de alta"));
   });
 
-  it("homepage renders the city picker as links to /alta/", () => {
+  it("homepage renders the city picker as links to /alta/, plus an 'Otra Ciudad' option", () => {
     const dom = buildPage(stub());
     const doc = dom.window.document;
-    const links = [
-      ...doc.querySelectorAll("#wizard-root a.city-option:not(.city-option-other)"),
-    ] as HTMLAnchorElement[];
-    expect(links).toHaveLength(7);
+    const links = [...doc.querySelectorAll("#wizard-root a.city-option")] as HTMLAnchorElement[];
+    expect(links).toHaveLength(8); // the shortcut cities
     const hrefs = links.map((a) => a.getAttribute("href"));
     expect(hrefs).toContain("/alta/?city=lujan");
     expect(hrefs).toContain("/alta/?city=san-andres-de-giles");
-    // 'Otra ciudad' is now a link to the waitlist form.
-    const other = doc.querySelector("#wizard-root a.city-option-other") as HTMLAnchorElement;
-    expect(other.getAttribute("href")).toBe("/alta/?waitlist=1");
+    // "Otra Ciudad" is a look-alike option (same .city-option class), inside the list.
+    const other = doc.getElementById("city-other") as HTMLButtonElement;
+    expect(other).not.toBeNull();
+    expect(other.classList.contains("city-option")).toBe(true);
+    expect(other.closest(".option-list")).not.toBeNull();
+    // The submit exists but is hidden, and there's no input until "Otra Ciudad" is clicked.
+    expect((doc.getElementById("city-other-submit") as HTMLButtonElement).hidden).toBe(true);
+    expect(doc.getElementById("city-other-input")).toBeNull();
   });
 
   it("carries captured UTMs onto the city-picker links (new-tab safe)", () => {
@@ -209,12 +234,21 @@ describe("website: Flow B wizard", () => {
     expect(doc.getElementById("product-grid")).toBeNull();
   });
 
-  it("the /alta page shows the city picker when ?city is missing or invalid", () => {
-    const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/?city=bogus", "alta/index.html");
-    const links = dom.window.document.querySelectorAll(
-      "#wizard-root a.city-option:not(.city-option-other)",
-    );
-    expect(links).toHaveLength(7);
+  it("the /alta page shows the city picker when ?city is missing", async () => {
+    const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/", "alta/index.html");
+    await tick();
+    const links = dom.window.document.querySelectorAll("#wizard-root a.city-option");
+    expect(links).toHaveLength(8);
+  });
+
+  it("the /alta page carries an unrecognized ?city into the wizard (proceed-anyway), not the picker", async () => {
+    // A direct /alta/?city=<unknown> link (e.g. from a "continuar igual" nudge) is
+    // de-slugged and proceeds — coverage decides downstream, no bounce to step 1.
+    const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/?city=monte-chico", "alta/index.html");
+    await tick();
+    const doc = dom.window.document;
+    expect(doc.querySelectorAll("#wizard-root a.city-option")).toHaveLength(0); // not the picker
+    expect(doc.querySelector("#wizard-root")!.textContent).toContain("$800"); // product step for "Monte Chico"
   });
 
   it("completes product → data → day → confirm → success", async () => {
@@ -456,69 +490,93 @@ describe("website: Flow B wizard", () => {
     expect(decodeURIComponent(wa!.href)).toContain("[REV-COB]"); // sentinel in the deep link
   });
 
-  it("'Otra ciudad' links to the waitlist form", () => {
+  it("'Otra Ciudad': click reveals an inline input + submit, which snaps via /api/resolve-city", async () => {
     const dom = buildPage(stub());
-    const other = dom.window.document.querySelector(
-      "#wizard-root a.city-option-other",
-    ) as HTMLAnchorElement;
-    expect(other).not.toBeNull();
-    expect(other.getAttribute("href")).toContain("/alta/?waitlist=1");
-  });
-
-  it("the /alta waitlist form captures an uncovered-zone lead + shows success", async () => {
-    const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/?waitlist=1", "alta/index.html");
+    await tick(); // GET /api/cities warms the suggestion list
     const doc = dom.window.document;
-    // Standalone form (no product/stepper): the waitlist fields render on boot.
-    expect(doc.getElementById("wl-name")).not.toBeNull();
-    expect(doc.getElementById("wl-zone")).not.toBeNull();
 
-    type(dom, "wl-name", "Ana Prueba");
-    typeDigits(dom, "wl-phone", "2324555000"); // same mask as the data step, no known city to prefill
-    type(dom, "wl-zone", "Navarro");
-    type(dom, "wl-comment", "Cerca de la plaza");
-    click(dom, "#wl-submit");
+    click(dom, "#city-other");
+    // The option became an input (same .city-option class); the submit now shows.
+    const input = doc.getElementById("city-other-input") as HTMLInputElement;
+    expect(input).not.toBeNull();
+    expect(input.classList.contains("city-option")).toBe(true);
+    expect(doc.getElementById("city-other")).toBeNull(); // the button was replaced in place
+    expect((doc.getElementById("city-other-submit") as HTMLButtonElement).hidden).toBe(false);
+
+    typeInto(dom, "city-other-input", "necochea");
+    const fetchSpy = (dom.window as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+    click(dom, "#city-other-submit");
+    await tick();
+    expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes("/api/resolve-city"))).toBe(true);
+    expect(doc.getElementById("city-second-thought")).toBeNull(); // recognized city → redirect, no nudge
+  });
+
+  it("'Otra Ciudad': an unrecognized city offers up to 3 closest options instead of dead-ending", async () => {
+    const dom = buildPage(stub());
+    await tick();
+    click(dom, "#city-other");
+    typeInto(dom, "city-other-input", "monte chico");
+    click(dom, "#city-other-submit");
     await tick();
 
-    expect(waitlists).toHaveLength(1);
-    expect(waitlists[0]).toMatchObject({
-      source: "web",
-      name: "Ana Prueba",
-      phone: "+5492324555000", // canonical E.164
-      city: "Navarro", // free-text zone
-      comment: "Cerca de la plaza",
-    });
-    expect(doc.querySelector("#wizard-root")!.textContent).toContain("Te anotamos");
+    const doc = dom.window.document;
+    // Rendered inline (still on the city step) — no navigation to a broken URL.
+    expect(doc.getElementById("city-second-thought")).not.toBeNull();
+    // Continuar stays disabled after submit — can't be re-clicked on the same text.
+    expect((doc.getElementById("city-other-submit") as HTMLButtonElement).disabled).toBe(true);
+    // One link per suggestion (the stub returns two), each to its canonical slug.
+    const dym0 = doc.getElementById("city-did-you-mean-0") as HTMLAnchorElement;
+    const dym1 = doc.getElementById("city-did-you-mean-1") as HTMLAnchorElement;
+    expect(dym0.getAttribute("href")).toBe("/alta/?city=necochea");
+    expect(dym1.getAttribute("href")).toBe("/alta/?city=navarro");
+    // Continuar igual carries the typed city as-is.
+    const proceed = doc.getElementById("city-proceed-anyway") as HTMLAnchorElement;
+    expect(proceed.getAttribute("href")).toBe("/alta/?city=monte-chico");
+    expect(proceed.textContent).toContain("monte chico");
   });
 
-  it("waitlist phone: defaults to the bare '+54 9' (no known city), same digit-only mask as the data step", () => {
-    const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/?waitlist=1", "alta/index.html");
-    const phone = () => (dom.window.document.getElementById("wl-phone") as HTMLInputElement).value;
-    expect(phone()).toBe("+54 9"); // no area code known yet
-    expect(phone() + phoneGhostPending(dom, "wl-phone")).toBe("+54 9 ____ __-____");
-    typeDigits(dom, "wl-phone", "abc"); expect(phone()).toBe("+54 9"); // letters rejected
-    typeDigits(dom, "wl-phone", "2324123456"); expect(phone()).toBe("+54 9 2324 12-3456");
-    typeDigits(dom, "wl-phone", "9"); expect(phone()).toBe("+54 9 2324 12-3456"); // full: extra rejected
-    backspacePhone(dom, "wl-phone", 10);
-    expect(phone()).toBe("+54 9"); // back to the bare AR default (549 typed, nothing after)
-  });
-
-  it("waitlist phone: only '+' is fixed — clearing the AR default entirely allows a foreign number", () => {
-    const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/?waitlist=1", "alta/index.html");
-    const phone = () => (dom.window.document.getElementById("wl-phone") as HTMLInputElement).value;
-    backspacePhone(dom, "wl-phone", 3); // clear the "549" default entirely
-    expect(phone()).toBe("+"); // only the "+" survives
-    typeDigits(dom, "wl-phone", "34612345678"); // e.g. a Spanish number
-    expect(phone()).toBe("+34612345678");
-    expect(phoneGhostPending(dom, "wl-phone")).toBe("");
-  });
-
-  it("waitlist form blocks submit when required fields are empty", async () => {
-    const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/?waitlist=1", "alta/index.html");
-    type(dom, "wl-name", "Ana"); // phone + zone left empty
-    click(dom, "#wl-submit");
+  it("'Otra Ciudad': Continuar is blocked until a city is actually typed", async () => {
+    const dom = buildPage(stub());
     await tick();
-    expect(waitlists).toHaveLength(0);
-    expect(dom.window.document.getElementById("wl-submit")).not.toBeNull(); // still on the form
+    click(dom, "#city-other");
+    const submit = dom.window.document.getElementById("city-other-submit") as HTMLButtonElement;
+    expect(submit.hidden).toBe(false);
+    expect(submit.disabled).toBe(true); // revealed but blocked while the input is empty
+    typeInto(dom, "city-other-input", "monte chico");
+    expect(submit.disabled).toBe(false); // real text → enabled
+    typeInto(dom, "city-other-input", "   ");
+    expect(submit.disabled).toBe(true); // cleared back to whitespace → blocked again
+  });
+
+  it("'Otra Ciudad': Enter in the input snaps like the submit button", async () => {
+    const dom = buildPage(stub());
+    await tick();
+    click(dom, "#city-other");
+    type(dom, "city-other-input", "tandil");
+    const fetchSpy = (dom.window as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+    const input = dom.window.document.getElementById("city-other-input") as HTMLInputElement;
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes("/api/resolve-city"))).toBe(true);
+  });
+
+  it("'Otra Ciudad': typing filters a styled suggestions dropdown; clicking one snaps it", async () => {
+    const dom = buildPage(stub());
+    await tick(); // suggestion list ready from GET /api/cities
+    click(dom, "#city-other");
+    const doc = dom.window.document;
+
+    typeInto(dom, "city-other-input", "nec");
+    const labels = [...doc.querySelectorAll(".city-suggestions li")].map((li) => li.textContent);
+    expect(labels).toContain("Necochea");
+
+    const fetchSpy = (dom.window as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+    const li = [...doc.querySelectorAll(".city-suggestions li")].find(
+      (l) => l.textContent === "Necochea",
+    )!;
+    li.dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true }));
+    await tick();
+    expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes("/api/resolve-city"))).toBe(true);
   });
 
   // ---- mid-flow persistence (sessionStorage) ----

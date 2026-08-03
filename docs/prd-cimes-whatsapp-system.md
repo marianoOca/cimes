@@ -1,6 +1,6 @@
 # PRD — CIMES WhatsApp Sales & Logistics Automation
 
-**Client:** CIMES (cimes-silva.com) — water/soda home delivery, Mercedes (Buenos Aires) + Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate.
+**Client:** CIMES (cimes-silva.com) — water/soda home delivery, Mercedes (Buenos Aires) + Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate, Esboar.
 
 **Date:** 2026-07-10
 
@@ -231,7 +231,7 @@ Rebuild the CIMES site (currently a minimal landing with an embedded LeadConnect
 4. **"¿Cómo funciona?" — 3 steps** (form → WhatsApp confirmation → weekly delivery).
 5. **Product catalog** grid: bidones retornables 12L/20L, soda en sifón, agua saborizada, dispenser frío-calor, dispenser natural. Prices intentionally omitted on site (city-dependent) — CTA to WhatsApp.
 6. **Trust section**: quality, retornables/environment, weekly service.
-7. **Coverage areas**: Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate.
+7. **Coverage areas**: Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate, Escobar.
 8. **Testimonials** (client provides 3).
 9. **Footer**: contact email, IG `cimes.silva`, Facebook, TikTok.
 

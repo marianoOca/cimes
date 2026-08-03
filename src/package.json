@@ -6,6 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "dev": "tsx watch --env-file=.env src/index.ts",
+    "dev:stub": "tsx ../dev/stub-backend.ts",
     "start": "node --env-file=.env --import tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },

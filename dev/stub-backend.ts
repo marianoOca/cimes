@@ -1,9 +1,11 @@
-// Local STUB backend for CIMES website QA. Serves canned JSON for the four
-// endpoints the wizard calls, so the /alta flow can be exercised in a browser
-// WITHOUT the real backend (no WaterService creds, no real order writes).
-//   node stub-backend.mjs   (env: PORT=3001)
-// Point qa-server at it:  BACKEND=http://localhost:3001
-import { createServer } from "node:http";
+// Local STUB backend for CIMES website QA. Serves canned JSON for the endpoints
+// the wizard calls, so the /alta flow can be exercised in a browser WITHOUT the
+// real backend (no WaterService creds, no real order writes). Run via tsx (see
+// `npm run dev:stub` / dev.sh) so it can import the REAL city list + matcher —
+// city snapping behaves exactly like production; only the external services
+// (prices/coverage/orders) are faked here. `./dev.sh --real` hits those for real.
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { BA_CITIES, matchCity } from "../src/src/engine/cities.js";
 
 const PORT = Number(process.env.PORT || 3001);
 
@@ -28,17 +30,17 @@ const coverage = {
   ],
 };
 
-const json = (res, code, body) => {
+const json = (res: ServerResponse, code: number, body: unknown): void => {
   res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
 };
 
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost:${PORT}`);
+const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
   let body = "";
   for await (const c of req) body += c;
-  const data = body ? JSON.parse(body) : {};
+  const data: Record<string, any> = body ? JSON.parse(body) : {};
 
   if (req.method === "GET" && path === "/api/prices") {
     return json(res, 200, { city: url.searchParams.get("city"), ...catalog });
@@ -46,15 +48,21 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && path === "/api/coverage") {
     return json(res, 200, coverage);
   }
-  if (req.method === "POST" && path === "/api/waitlist") {
-    console.log("WAITLIST lead:", JSON.stringify(data));
-    return json(res, 200, { ok: true });
+  // Real list + matcher (shared with production) — typos/abbreviations snap here
+  // exactly as they would live.
+  if (req.method === "GET" && path === "/api/cities") {
+    return json(res, 200, { cities: BA_CITIES });
+  }
+  if (req.method === "POST" && path === "/api/resolve-city") {
+    return json(res, 200, matchCity(String(data.text ?? "")));
   }
   if (req.method === "POST" && path === "/api/orders") {
     // STUB: acknowledge without any real WaterService/Sheet write. Mirror the
     // real server: resolve items against the catalog, sum the total, summarize.
-    const priceOf = (name) => (catalog.products.find((p) => p.name === name) || {}).price || 0;
-    const items = data.items ?? (data.product ? [{ product: data.product, qty: 1 }] : []);
+    const priceOf = (name: string) =>
+      (catalog.products.find((p) => p.name === name) || ({} as { price?: number })).price || 0;
+    const items: { product: string; qty: number }[] =
+      data.items ?? (data.product ? [{ product: data.product, qty: 1 }] : []);
     const total = items.reduce((s, it) => s + priceOf(it.product) * it.qty, 0);
     const summary = items.map((it) => `${it.qty}x ${it.product}`).join(", ");
     console.log(`ORDER (stub, not written): ${summary} = $${total}`, JSON.stringify(data));

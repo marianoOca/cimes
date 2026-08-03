@@ -17,7 +17,8 @@ import { sendButtons, sendFlow, sendList, sendLocation, sendText } from "../kaps
 import type { NormalizedInbound } from "../kapso/webhook.js";
 import { runAiTurn } from "../ai/agent.js";
 import { getPriceProvider } from "../ai/tools.js";
-import { COVERED_CITIES, isCoveredCity, runCoverageForLead } from "./coverage.js";
+import { COVERED_CITIES, runCoverageForLead } from "./coverage.js";
+import { matchCity as matchBaCity } from "./cities.js";
 import { enterManualReview, MANUAL_REVIEW_TAG } from "./manual-review.js";
 import { enqueueForLead } from "./leadQueue.js";
 import { onLeadReply, scheduleFollowups } from "../engines/followups.js";
@@ -44,9 +45,11 @@ async function reply(lead: Lead, phoneNumberId: string, db: DB, text: string): P
 
 // ---------- deterministic matchers (hybrid input, engine-side) ----------
 
+// Snap free text to the closest BA city (typo-tolerant). Returns null below the
+// confidence floor so non-city messages fall through to product matching / AI.
 function matchCity(text: string): string | null {
-  const t = normalizeText(text);
-  return COVERED_CITIES.find((c) => t.includes(normalizeText(c))) ?? null;
+  const m = matchBaCity(text);
+  return m.matched ? m.city : null;
 }
 
 function matchProduct(text: string, catalog: PricedCatalog): string | null {
@@ -192,34 +195,19 @@ function title(s: string): string {
 }
 
 async function catalogFor(lead: Lead): Promise<PricedCatalog> {
-  // Location-based list once coverage ran; provisional city map before that.
-  return lead.price_list
-    ? getPriceProvider().getPricesForList(lead.price_list)
-    : getPriceProvider().getCatalog(lead.city);
+  // Prices are deterministic by city (GENERAL / per-city exception); the
+  // neighbor-derived list no longer governs pricing.
+  return getPriceProvider().getCatalog(lead.city);
 }
 
 // ---------- stage advancement helpers ----------
 
-async function setCity(db: DB, lead: Lead, city: string, phoneNumberId: string): Promise<boolean> {
-  if (!isCoveredCity(city)) {
-    updateLead(db, lead.lead_id, { city });
-    if (addLabel(db, lead.lead_id, "otra_ciudad")) {
-      emitEvent(db, {
-        lead_id: lead.lead_id,
-        source: lead.source,
-        city,
-        event_type: "label_applied",
-        stage: lead.stage,
-        metadata: { label: "otra_ciudad" },
-      });
-    }
-    await reply(lead, phoneNumberId, db, copy.coverageNegative);
-    mirrorLeadSync(db, getLeadById(db, lead.lead_id)!);
-    return false;
-  }
+// Any BA city is accepted (the shortcut list is not a coverage gate) — set it
+// and advance to product. Coverage is decided later, at the address step, by
+// WaterService neighbors.
+function setCity(db: DB, lead: Lead, city: string): void {
   updateLead(db, lead.lead_id, { city });
   enterStage(db, lead.lead_id, "producto");
-  return true;
 }
 
 function enterStage(db: DB, leadId: string, stage: Lead["stage"]): void {
@@ -471,21 +459,12 @@ async function routeMessage(db: DB, leadId: string, msg: NormalizedInbound): Pro
     switch (kind) {
       case "city": {
         if (value === "otra") {
-          // Out of coverage: tag it now (otra_ciudad is terminal → no follow-ups),
-          // ask which city, and keep the AI on to field questions + capture the zone.
-          enterStage(db, leadId, "esperando_zona");
-          if (addLabel(db, leadId, "otra_ciudad")) {
-            emitEvent(db, {
-              lead_id: leadId,
-              source: lead.source,
-              city: lead.city,
-              event_type: "label_applied",
-              stage: "esperando_zona",
-              metadata: { label: "otra_ciudad" },
-            });
-          }
+          // Free-text city entry: ask, stay in inicio. The next message is snapped
+          // to the closest BA city by the free-text fast path and continues the
+          // normal flow — coverage is decided later at the address step.
           await reply(lead, pn, db, copy.zonePrompt);
-        } else if (await setCity(db, lead, value, pn)) {
+        } else {
+          setCity(db, lead, value);
           await presentStage(db, leadId, pn);
         }
         return;
@@ -551,16 +530,6 @@ async function routeMessage(db: DB, leadId: string, msg: NormalizedInbound): Pro
   // --- free text: engine-side matching first (hybrid fast path, 02 §4) ---
   const text = msg.content;
   if (msg.kind === "text" && text) {
-    // Out of coverage, waiting on the zone: hand to the AI. It fields any questions
-    // and records the city via registrar_zona (which ends the flow + turns AI off).
-    // Deterministic city/product matching is skipped here on purpose.
-    if (lead.stage === "esperando_zona") {
-      const result = await runAiTurn(db, leadId, text, { phoneNumberId: pn }, null);
-      for (const replyText of result.replies) {
-        await reply(getLeadById(db, leadId)!, pn, db, replyText);
-      }
-      return;
-    }
     // Awaiting a re-typed address after the customer rejected the map pin.
     if (lead.stage === "confirmar_ubicacion") {
       updateLead(db, leadId, { address: text.trim() });
@@ -580,7 +549,7 @@ async function routeMessage(db: DB, leadId: string, msg: NormalizedInbound): Pro
       const city = matchCity(text);
       if (city) {
         if (isNewLead(db, leadId)) await reply(lead, pn, db, copy.greeting);
-        if (!(await setCity(db, getLeadById(db, leadId)!, city, pn))) return;
+        setCity(db, getLeadById(db, leadId)!, city);
         lead = getLeadById(db, leadId)!;
         advanced = true;
       }

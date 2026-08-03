@@ -8,7 +8,7 @@ This document owns: system summary, language policy, architecture & stack, the m
 
 ## 1. System summary
 
-Build a WhatsApp sales bot + internal CRM + public self-service website for CIMES, an Argentine water/soda home-delivery company operating in 7 cities (Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate). The system takes a lead from first contact (WhatsApp, website, or Instagram lead form) through coverage check, price quote, and order confirmation, then **writes the confirmed order directly into WaterService** (the client's delivery-management system: creates the client record + a driver ticket) and mirrors it into a Google Sheet the operator reads each morning. A conversational AI (Claude) handles free-text understanding and FAQs; all deterministic work — prices, coverage, delivery days — is done by tools and providers, never by the model. A follow-up engine re-engages silent leads inside WhatsApp's free 24h window, and a debt-reminder engine sends visit-eve balance reminders. An internal CRM lets the operator watch conversations, take over from the AI, and label leads.
+Build a WhatsApp sales bot + internal CRM + public self-service website for CIMES, an Argentine water/soda home-delivery company serving Buenos Aires province (the cities Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate, and Escobar are quick-pick shortcuts, but **any BA province city is served** — coverage is decided per-address by WaterService neighbours, not by a city list). The system takes a lead from first contact (WhatsApp, website, or Instagram lead form) through coverage check, price quote, and order confirmation, then **writes the confirmed order directly into WaterService** (the client's delivery-management system: creates the client record + a driver ticket) and mirrors it into a Google Sheet the operator reads each morning. A conversational AI (Claude) handles free-text understanding and FAQs; all deterministic work — prices, coverage, delivery days — is done by tools and providers, never by the model. A follow-up engine re-engages silent leads inside WhatsApp's free 24h window, and a debt-reminder engine sends visit-eve balance reminders. An internal CRM lets the operator watch conversations, take over from the AI, and label leads.
 
 ---
 
@@ -117,12 +117,12 @@ One record per lead/contact, keyed by phone (SQLite; source-agnostic — WhatsAp
 | `phone` | string | E.164; the natural key for dedupe and WaterService lookup (#2) |
 | `source` | enum | `whatsapp` \| `web` \| `instagram` |
 | `name` | string | Pre-filled from WhatsApp profile / IG form when it looks real |
-| `city` | string | One of the 7 covered cities, or `otra` |
+| `city` | string | A Buenos Aires province city — the 8 shortcut cities are quick-picks; free-text is snapped to the closest real BA city (§5.6 `resolve-city`) |
 | `address` | string | Composed street + number |
 | `cross_streets` | string | "entre calles" |
 | `product` | string | Selected product / interest |
 | `price` | number | Quoted price (from PriceProvider, never model-computed) |
-| `price_list` | string | Resolved `listaDePrecios_id` (location-based, from #12 neighbors) |
+| `price_list` | string | Resolved `listaDePrecios_id` — **city-deterministic** (`CITY_PRICE_LIST_MAP` exception or `PRICE_LIST_DEFAULT_ID`), not from #12 neighbors |
 | `route` | string | `reparto` id/name resolved from coverage |
 | `delivery_day` | string | Chosen weekday |
 | `delivery_window` | string | Time window (`horarioProm`) |
@@ -161,7 +161,6 @@ Two dimensions, shown together in the CRM and the sheet.
 | `cliente_cerrado` | Confirmed order (order pipeline) |
 | `pedido_cerrado` | Delivered — **manual toggle only.** Auto-labeling from delivery data is not built; that is a deliberate task boundary, not a TODO. Do not build any WaterService-webhook/delivery-note auto-labeling for this |
 | `mal_lead` | Operator-defined bad zone / unreachable address |
-| `otra_ciudad` | City outside coverage |
 | `derivado` | Human handoff triggered |
 | `revision_cobertura` | **Covered city, but no delivery time we can offer** (no serviceable neighbor/route). Auto-applied by the manual-review handoff (`01 §4.5`): AI off, mirrored to Chatwoot for a human to decide "we can take you" / "we can't". Distinct from `mal_lead` (rejected) — this is *pending a human decision* |
 
@@ -177,11 +176,11 @@ Five working stages (`inicio`, `producto`, `datos_entrega`, `dia_entrega`, `conf
 
 ### 5.5 AI tool names
 
-The chatbot exposes exactly these tools to the model (details, signatures, and prompt in `02-chatbot.md`):
+The chatbot exposes exactly these **five** tools to the model (details, signatures, and prompt in `02-chatbot.md`):
 
-`get_prices`, `check_coverage`, `get_delivery_options`, `confirm_order`, `handoff`, `registrar_zona`
+`get_prices`, `check_coverage`, `get_delivery_options`, `confirm_order`, `handoff`
 
-These are thin wrappers over core-api providers/endpoints: `get_prices` → PriceProvider, `check_coverage` / `get_delivery_options` → GeocodingProvider + WaterService coverage (#12), `confirm_order` → `POST /api/orders` pipeline, `handoff` → sets `ai_enabled = false` (§5.2) and notifies the operator. `registrar_zona` → the WhatsApp equivalent of `POST /api/waitlist`: records an out-of-coverage city/zone (label `otra_ciudad` + orders-sheet lead row) and sets `ai_enabled = false`. It exists only for the WhatsApp "Otra ciudad" path, where — unlike the website form — the AI stays on to field questions while capturing the zone conversationally.
+These are thin wrappers over core-api providers/endpoints: `get_prices` → PriceProvider, `check_coverage` / `get_delivery_options` → GeocodingProvider + WaterService coverage (#12), `confirm_order` → `POST /api/orders` pipeline, `handoff` → sets `ai_enabled = false` (§5.2) and notifies the operator.
 
 ### 5.6 REST endpoints core-api exposes (for website & chatbot)
 
@@ -192,7 +191,8 @@ These are thin wrappers over core-api providers/endpoints: `get_prices` → Pric
 | `GET /api/prices?city=` | Return the catalog with the given city's prices. Response: product list with prices from the resolved price list for that city. Never mixes two cities' lists. |
 | `POST /api/coverage` | Body: composed address (+ city). Runs GeocodingProvider + WaterService coverage (#12). Response: `covered` boolean, resolved coordinates, price list id, and available delivery-day options each with route + weekday + time window. |
 | `POST /api/orders` | Body: full order (name, phone, city, address, cross_streets, chosen delivery day/window, source, and **`items: [{product, qty}]`** — a single `product` string is still accepted for legacy single-item callers). The server sums the total from the city's price list (price authority server-side) and records the order as one summary line (`"2x A, 1x B"`) + total. Runs the **shared confirmation pipeline**: create WaterService client (#6) + attach contact (#7) + create driver ticket (#3, dispatched by scheduler the day before delivery) + append orders-sheet row + set label `cliente_cerrado`. Response: order id + waterservice_client_id + ticket status. Idempotent per lead. |
-| `POST /api/waitlist` | Body: name, phone, free-text city/zone, optional comment (+ attribution). Uncovered-area lead capture for the website's "Otra ciudad" form (04-website §5): create/update lead (#2) + set label `otra_ciudad` + append orders-sheet lead row. No coverage check, no order pipeline. Response: `{ ok: true }`. Idempotent per phone. |
+| `GET /api/cities` | Return the ~130 Buenos Aires province cities for the website's "Otra ciudad" autocomplete. Response: `{ cities: string[] }`. Backed by `BA_CITIES` in `engine/cities.ts`. No side effects. |
+| `POST /api/resolve-city` | Body: `{ text }`. Fuzzy-snap free text to the closest real BA city (shared `matchCity()` in `engine/cities.ts`). Response: `{ city, matched, score }`. **Never rejects** — keeps the input as-is when nothing is close. Used by the website "Otra ciudad" entry; the WhatsApp engine calls `matchCity` directly. |
 | `GET /api/export/events?from=&to=` | Operator-triggered CSV export of the `events` table (§5.8) over a date range, in order. |
 
 ### 5.7 Provider interfaces
@@ -270,7 +270,8 @@ All env vars, with the module that owns each. **Each module doc also lists its o
 | `DEBT_THRESHOLD` | `0` | core-api | Minimum balance to trigger a reminder |
 | `DEBT_REMINDER_COOLDOWN_DAYS` | `14` | core-api | No repeat reminder within this many days |
 | `DEBT_REMINDER_SEND_HOUR` | `09` | core-api | Morning send hour |
-| `CITY_PRICE_LIST_MAP` | — | core-api | Provisional city→list for the first quote; final list comes from #12 neighbors' `listaDePrecios_id` |
+| `PRICE_LIST_DEFAULT_ID` | — | core-api | Default price list (**LISTA PRECIOS GENERAL**) applied to every city unless overridden. Pricing is **city-deterministic** at every step (quote = charge); `resolveCityListId` falls back here for any unmapped city (never throws) |
+| `CITY_PRICE_LIST_MAP` | — | core-api | Per-city price-list **exceptions** (e.g. Lobos → PRECIO LOBOS). Cities not listed use `PRICE_LIST_DEFAULT_ID`. Not provisional — this is the list quoted *and* charged |
 | `PRICES_SOURCE` | *(none — fully open)* | core-api | Selects PriceProvider impl (`waterservice` \| `sheet`). No forced default — build the abstraction (§8 open item a) |
 | `PRICES_SHEET_ID` | — | core-api | Required if `PRICES_SOURCE=sheet` |
 | `OPERATOR_PHONE` | — | core-api | Handoff / failure notifications to operator |

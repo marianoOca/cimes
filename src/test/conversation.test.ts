@@ -15,8 +15,8 @@ vi.mock("../src/waterservice/client.js", () => ({
   createContacto: vi.fn(async () => undefined),
 }));
 
-// AI turns are mocked — no deterministic test path reaches the model except the
-// out-of-coverage waitlist branch, which we assert on routing only.
+// AI turns are mocked — these tests assert the deterministic (engine-side) paths;
+// the AI only handles free-text FAQs/glue, which these cases don't exercise.
 vi.mock("../src/ai/agent.js", () => ({
   runAiTurn: vi.fn(async () => ({ replies: [], handoffTriggered: false })),
 }));
@@ -25,8 +25,7 @@ import { openDb } from "../src/db/db.js";
 import { getLeadByPhone } from "../src/db/leads.js";
 import { handleInbound } from "../src/engine/conversation.js";
 import { setGeocodingProvider } from "../src/engine/coverage.js";
-import { runTool, setPriceProvider } from "../src/ai/tools.js";
-import { runAiTurn } from "../src/ai/agent.js";
+import { setPriceProvider } from "../src/ai/tools.js";
 import { sendButtons, sendList, sendLocation, sendText } from "../src/kapso/send.js";
 import type { NormalizedInbound } from "../src/kapso/webhook.js";
 
@@ -85,7 +84,7 @@ describe("conversation engine — Flow A happy path (deterministic, no AI)", () 
       inbound({ content: "hola, soy de Luján, quiero un bidón de 20 litros" }),
     );
     const lead = getLeadByPhone(db, "5491100000042")!;
-    expect(lead.city).toBe("luján");
+    expect(lead.city).toBe("Luján"); // snapped to the canonical BA-city name
     expect(lead.product).toBe("Bidon x 20 lts");
     expect(lead.price).toBe(800);
     expect(lead.stage).toBe("datos_entrega");
@@ -229,71 +228,25 @@ describe("conversation engine — Flow A happy path (deterministic, no AI)", () 
     expect(handoff.some((t) => t.includes("verifico la cobertura"))).toBe(true);
   });
 
-  it("clicking Otra → tags otra_ciudad, asks the city, keeps AI on, no follow-ups", async () => {
+  it("clicking Otra → asks the city, then free text snaps to a BA city and enters producto", async () => {
     const db = openDb(":memory:");
     const from = "5491100000042";
     await handleInbound(db, inbound({ content: "hola" })); // greet + city list
     await handleInbound(db, inbound({ kind: "list", content: "city:otra", title: "Otra" }));
 
-    const lead = getLeadByPhone(db, from)!;
-    expect(lead.stage).toBe("esperando_zona");
-    expect(lead.labels).toContain("otra_ciudad");
-    expect(lead.ai_enabled).toBe(true); // AI stays on to field questions + capture the zone
+    let lead = getLeadByPhone(db, from)!;
+    // No dead-end: still at the city step, no terminal label, AI untouched.
+    expect(lead.stage).toBe("inicio");
+    expect(lead.labels).not.toContain("otra_ciudad");
+    expect(lead.ai_enabled).toBe(true);
     const asked = vi.mocked(sendText).mock.calls.map((c) => String(c[2]));
     expect(asked.some((t) => t.includes("ciudad"))).toBe(true);
-    // otra_ciudad is terminal → no follow-ups scheduled even while we wait.
-    const followups = db
-      .prepare("SELECT COUNT(*) n FROM jobs WHERE type='followup' AND status='pending'")
-      .get() as { n: number };
-    expect(followups.n).toBe(0);
-  });
 
-  it("esperando_zona routes free text to the AI, skipping deterministic matching", async () => {
-    const db = openDb(":memory:");
-    const from = "5491100000042";
-    await handleInbound(db, inbound({ content: "hola" }));
-    await handleInbound(db, inbound({ kind: "list", content: "city:otra", title: "Otra" }));
-
-    vi.mocked(runAiTurn).mockResolvedValueOnce({
-      replies: ["¿En qué ciudad recibirías el pedido?"],
-      handoffTriggered: false,
-    });
-    await handleInbound(db, inbound({ content: "¿tienen soda?" }));
-
-    // Went to the AI (not to city/product matching), with no catalog (uncovered).
-    expect(runAiTurn).toHaveBeenCalled();
-    const args = vi.mocked(runAiTurn).mock.calls.at(-1)!;
-    expect(args[2]).toBe("¿tienen soda?");
-    expect(args[4]).toBeNull();
-    const sent = vi.mocked(sendText).mock.calls.map((c) => String(c[2]));
-    expect(sent.some((t) => t.includes("ciudad"))).toBe(true);
-    // Still waiting, AI still on.
-    const lead = getLeadByPhone(db, from)!;
-    expect(lead.stage).toBe("esperando_zona");
-    expect(lead.ai_enabled).toBe(true);
-  });
-
-  it("registrar_zona tool records the zone, queues the waitlist row, turns AI off", async () => {
-    const db = openDb(":memory:");
-    const from = "5491100000042";
-    await handleInbound(db, inbound({ content: "hola" }));
-    await handleInbound(db, inbound({ kind: "list", content: "city:otra", title: "Otra" }));
-    const before = getLeadByPhone(db, from)!;
-
-    const out = await runTool(db, before.lead_id, "registrar_zona", { zona: "Villa Carlos Paz" }, {
-      phoneNumberId: "PN1",
-    });
-
-    const lead = getLeadByPhone(db, from)!;
-    expect(lead.city).toBe("Villa Carlos Paz");
-    expect(lead.ai_enabled).toBe(false);
-    expect(lead.labels).toContain("otra_ciudad");
-    // Web-parity waitlist row queued (order_id null).
-    const waitlist = db
-      .prepare("SELECT COUNT(*) n FROM jobs WHERE type='sheet_append_order'")
-      .get() as { n: number };
-    expect(waitlist.n).toBe(1);
-    expect(out).toContain("registrada");
+    // The user types a non-shortcut city → snapped to canonical + flow continues.
+    await handleInbound(db, inbound({ content: "necochea" }));
+    lead = getLeadByPhone(db, from)!;
+    expect(lead.city).toBe("Necochea");
+    expect(lead.stage).toBe("producto");
   });
 
   it("dedupes redelivered webhooks by message id", async () => {

@@ -21,6 +21,18 @@ deterministic work (prices, coverage, days).
 - `cd src && npm test` — tests (vitest)
 - `cd src && npm run typecheck` — tsc --noEmit
 
+### Local QA — two modes (don't mix them up)
+
+- `./dev.sh` — website + **STUB** backend. Runs the real app logic (incl. city
+  matching, via `npm run dev:stub`), but **WaterService/Sheets are faked and nothing
+  is written**. Use for UI/flow QA — no creds, no side effects.
+- `./dev.sh --real` — website + **REAL** backend against **live WaterService**
+  (`src/.env`). **This is the API-integration test.** Coverage/prices are read-only
+  (safe to hammer); **"Confirmar pedido" writes a REAL order** (client + ticket +
+  Sheet row) — use a disposable test client and delete it after.
+- `--real` prereqs in `src/.env`: WaterService creds + `PRICES_SOURCE` +
+  `PRICE_LIST_DEFAULT_ID` + `CITY_PRICE_LIST_MAP` (else `/api/prices` throws).
+
 ## Workspaces
 
 `docs/` (spec source of truth) · `src/` (backend: core API + chatbot + copy) ·

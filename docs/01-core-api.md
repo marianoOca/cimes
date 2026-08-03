@@ -37,12 +37,12 @@ Endpoint numbers (#1, #2, #3, #6, #7, #10, #12, #21, #28 …) refer to the **Wat
 |---|----------|----------------------|
 | 12 | `GET /Repartos/BusquedaClientesCercanosResultJson` `{address, metros}` | **Primary coverage tool and default `GeocodingProvider` implementation.** Geocodes the address itself (returns `coordenadas`) and lists neighbors, each with `listaDePrecios_id`, `visitas[]` (`dia`, `reparto_id`, `nombreReparto`), `ultimasVisitas` (`horarioMin/Max/Prom`, `cantidadVisitas`), `proximaVisita`, `diasProximaVisita`. **One call resolves: coverage, route, weekday, time window, price list, and coordinates for the alta.** Google Geocoding not required (kept only as a swappable adapter — see §3). `metros` = `COVERAGE_RADIUS_M`. |
 | 4 | `GET /Repartos/ObtenerClientesCercanosPorCoordenadas` `{excluir, latitud, longitud, radioMetros}` | Same data, keyed by coordinates. Fallback/secondary — use when you already hold coordinates (e.g. from the Google Maps geocoding adapter) instead of a raw address string. |
-| 5 | `GET /ListaDePrecios/ObtenerListaDePreciosDeCliente` `{ClienteId}` | Article→price map of a specific (nearest) client's list. Used by `PriceProvider` (waterservice impl) to resolve the exact prices for the neighbor-derived `listaDePrecios_id`. |
+| 5 | `GET /ListaDePrecios/ObtenerListaDePreciosDeCliente` `{ClienteId}` | Article→price map of a specific (nearest) client's list. Used by `PriceProvider` (waterservice impl) to resolve the exact prices for a specific `listaDePrecios_id`. |
 | 10 | `GET /ListaDePrecios/ObtenerMatrizListaDePrecios` `{tipoLista_id}` | Full price matrix + list names. Load at startup, refresh daily; cache only the **resolved** list into the AI prompt per conversation (never two cities' lists at once). Also the reference used by the daily sheet-consistency check when `PRICES_SOURCE=sheet`. |
 | 11 | `GET /AbonosTipos/ObtenerAbonosTipos` `{activo: true}` | Frío/calor subscription types + prices (`nombreAbono`, `precio`, `leyendaFacturacion`). Feeds product/quote answers about dispenser rental. |
 | 2 | `POST /api/Clientes/BusquedaRapidaResultJson` `{telefono \| datosCliente \| dni \| domicilio}` | Existing-client lookup **by phone**. Returns `fechaProximaVisita1/2/3`, `usuarioRepartidorHabitual`, `reparto_id`, `etiquetas`. Powers (a) **dedupe before #6** and (b) the support line ("¿cuándo pasa el repartidor?" answered from data). |
 | 8 | `POST /api/Clientes/ObtenerDatosCliente` `{cliente_id}` | Client detail incl. `diaProximaVisita1-3`. Use when you already have a `cliente_id` and need full detail. |
-| 6 | `POST /Clientes/CrearNuevoClientePorChatBot` | **Purpose-built for this bot. The alta.** Payload: `cliente {nombre, tipoDeClienteId: 1 (Familia), actividadId: 15 (Consumidor final), condicionIvaId: 2 (Consumidor Final), telefono, email, listaDePreciosId, reparto_id, domicilio {provincia, ciudad, calle, puerta, piso, depto, observaciones, cp, latitud, longitud}}`. `listaDePreciosId`, `reparto_id`, and `latitud`/`longitud` **all come from the #12 response** — do not re-derive them. Creates the client in **`Borrador`** state → returns `cliente_id`. Note: no flow collects `email` — send it empty/null; raise with the vendor only if #6 rejects that. |
+| 6 | `POST /Clientes/CrearNuevoClientePorChatBot` | **Purpose-built for this bot. The alta.** Payload: `cliente {nombre, tipoDeClienteId: 1 (Familia), actividadId: 15 (Consumidor final), condicionIvaId: 2 (Consumidor Final), telefono, email, listaDePreciosId, reparto_id, domicilio {provincia, ciudad, calle, puerta, piso, depto, observaciones, cp, latitud, longitud}}`. `reparto_id` and `latitud`/`longitud` **come from the #12 response** (do not re-derive them); **`listaDePreciosId` comes from the city rule** (`resolveCityListId` — §2, not #12), so the client is assigned the same list they were quoted and charged. Creates the client in **`Borrador`** state → returns `cliente_id`. Note: no flow collects `email` — send it empty/null; raise with the vendor only if #6 rejects that. |
 | 7 | `POST /api/Clientes/CreateContacto` | Attach the WhatsApp number to the client just created: `tipoContacto_ids: 1` (Primer contacto), `sector_ids: 6` (Titular), `celular`, notification flags (`enviarAvisoDeProximaVisita` etc. — **default false**, revisit later). |
 | 3 | `POST /api/Incidentes/Save` | **The "driver ticket" is an Incident.** For a new-client delivery: `tipoIncidente_ids: WS_INCIDENT_TYPE_ID` (default `1` = Gestión en ruta) + `subTipoIncidente_ids: WS_INCIDENT_SUBTYPE_ID` (default `28` = Visita por alta). Payload: `centroDistribucion_id` (from `WS_CENTRO_DISTRIBUCION_MAP[city]`), `cliente_id`, `titulo`, `descripcion` (HTML: product, time window, amount to collect), `fechaCierreEstimado` (`dd/MM/yyyy` = delivery date), `severidad_ids` (`WS_SEVERITY_ID`, default `2` = Media), and assignment via **`usuarioResponsable_id`** (driver's user id — derivable from neighbors' `usuarioRepartidorHabitual` in the #12 response) **OR** **`grupoResponsable_ids`** (mutually exclusive — the unused one must be null). **Called by the dispatch scheduler the day before delivery, not at order confirmation (§4.5/§4.6).** See the driver-ticket note in §12. |
 
@@ -67,19 +67,19 @@ The AI reaches prices **only** through this provider (guardrail §13). No hardco
 
 ```
 interface PriceProvider {
-  // catalog + prices for a given city (never mixes two cities' lists)
+  // catalog + prices for a given city (list resolved via resolveCityListId; never mixes two cities' lists)
   getCatalog(city: string): Promise<PricedCatalog>;
-  // resolve prices for a specific WaterService price-list id (from #12 neighbors)
+  // resolve prices for a specific WaterService price-list id
   getPricesForList(listaDePreciosId: string): Promise<PricedCatalog>;
 }
 ```
 
 **Implementations selected by `PRICES_SOURCE`:**
 
-- **`waterservice`** — prices from WaterService. `getPricesForList` → #5 for the exact neighbor-derived list; full matrix + list names via #10 (loaded at startup, refreshed daily). Abono types via #11.
+- **`waterservice`** — prices from WaterService. `getCatalog(city)` resolves the city's list id (`resolveCityListId`) then reads its prices; `getPricesForList` → #5 for a given list id; full matrix + list names via #10 (loaded at startup, refreshed daily). Abono types via #11.
 - **`sheet`** — prices from a Google Sheet (`PRICES_SHEET_ID`), refreshed roughly every ~15 min. When this impl is active, run a **daily consistency check against #10** and, on any mismatch, raise an **operator alert** (to `OPERATOR_PHONE`). The client confirms which source is the maintained one.
 
-Provisional first quote: at `producto` stage, before coverage runs, the provisional price list comes from `CITY_PRICE_LIST_MAP[city]`. The **final** price list is the location-based `listaDePrecios_id` returned by #12 neighbors (§4, coverage). **Re-quote if the resolved list differs from the provisional one.**
+**City-deterministic pricing (no provisional/final split).** The price list for a city is resolved by **`resolveCityListId(city)`**: `CITY_PRICE_LIST_MAP[city]` if the city has an exception (e.g. Lobos → PRECIO LOBOS), otherwise **`PRICE_LIST_DEFAULT_ID`** (LISTA PRECIOS GENERAL). **`resolveCityListId` never throws for an unmapped city — it falls back to the default.** The same list is used at the `producto` quote *and* at `POST /api/orders`, so **the shown price equals the charged price**. Coverage (#12) no longer influences pricing — there is no re-quote from neighbors' `listaDePrecios_id`.
 
 ---
 
@@ -107,13 +107,13 @@ This is the **server-side** logic of the flows. The WhatsApp rendering of each s
 
 ### 4.1 Flow A — Inbound WhatsApp lead (user writes first; free 24h session, no template cost)
 
-1. **`inicio`** — greet; resolve **city**. If the user free-typed city (+ product) in their first message, extract and skip the redundant step (hybrid input — see `02-chatbot.md`). City not covered → label `otra_ciudad`, polite no-coverage reply, end.
-2. **`producto`** — resolve **product** from the catalog and **quote immediately** in the same exchange via `PriceProvider.getCatalog(city)` (provisional list from `CITY_PRICE_LIST_MAP`). Quote **only that city's price list**.
+1. **`inicio`** — greet; resolve **city**. If the user free-typed city (+ product) in their first message, extract and skip the redundant step (hybrid input — see `02-chatbot.md`). The 8 shortcut cities are quick-picks, but **any BA province city is accepted**: a free-typed or "Otra" city is snapped to the closest real BA city via `matchCity` (`engine/cities.ts`) and the flow continues normally. **The city no longer gates coverage** — coverage is decided later at the address step (#12).
+2. **`producto`** — resolve **product** from the catalog and **quote immediately** in the same exchange via `PriceProvider.getCatalog(city)` (**city-deterministic** list via `resolveCityListId` — `CITY_PRICE_LIST_MAP` exception or `PRICE_LIST_DEFAULT_ID`, §2). Quote **only that city's price list**; this same list is charged at confirmation.
 3. **FAQs** — the AI answers grounded FAQs (frío/calor rental model, weekly visit cadence, bidón deposit vs rental, bajo sodio, delivery windows) from the knowledge base only. Unknown → handoff (§5).
 4. **`datos_entrega`** — collect delivery data: full name (pre-filled from WhatsApp profile name when it looks real), street, number, cross streets ("entre calles"), optional notes. (Rendered via the Kapso-hosted form — `02-chatbot.md`.)
 5. **Coverage check** — one call through `GeocodingProvider.resolve(address, COVERAGE_RADIUS_M)` (default impl #12) → resolved coordinates + neighbors with route, scheduled weekday, time window (`horarioProm`), `listaDePrecios_id`, and usual driver (`usuarioRepartidorHabitual`).
    - **No neighbors in radius** → label `mal_lead`, notify operator for manual review (edge: genuinely new zones). Do **not** invent a `sin_cobertura` label — the taxonomy is fixed (`00-master.md §5.3`).
-   - **Resolve the price list from the nearest neighbors' `listaDePrecios_id`** (location-based — stronger than a city→list map). **Re-quote if it differs** from the provisional city quote (step 2).
+   - **Pricing is NOT taken from neighbors.** The city-deterministic list (step 2, §2) is authoritative at every step; coverage (#12) resolves route, weekday, time window, coordinates, and usual driver only — never the price. No re-quote.
    - Emit `coverage_checked` event.
 6. **`dia_entrega`** — offer **delivery-day options**, each with route + weekday + time window (e.g. `Reparto 19 — sábado entre 10 y 13`). Sourced from the #12 `visitas[]` / `ultimasVisitas` data.
 7. **`confirmacion`** — order summary (product, price, address, delivery day/window) + confirm.
@@ -127,7 +127,7 @@ The website completes the entire signup on-page via this module's REST endpoints
 2. Delivery-data form: name, phone (WhatsApp), street + number + cross streets.
 3. Live coverage check (`POST /api/coverage` → GeocodingProvider/#12) → available delivery days with time windows; user picks one.
 4. Confirm (`POST /api/orders`) → **the same order pipeline as Flow A (§4.5)** with `source=web`, label `cliente_cerrado`.
-5. No coverage → polite on-page message; lead saved with `otra_ciudad` (out-of-city) or `mal_lead` (in-city, no neighbors).
+5. No coverage (no serving neighbors, any BA city) → polite on-page message; lead saved via `POST /api/manual-review` with label `revision_cobertura` (AI off, operator pinged) — see §9 and `04-website §5`.
 6. **Optional** (`WEB_CONFIRMATION_TEMPLATE`, default `false`): send one utility template confirming the order ("te lo llevamos el sábado entre 10 y 13"). The pipeline decides whether to request it; the actual send goes through the chatbot layer (`02-chatbot.md`).
 
 **No follow-up sequence applies to web signups** — they either complete or abandon. Follow-ups (§7) are WhatsApp-only.
@@ -147,7 +147,7 @@ This is the single pipeline behind order confirmation from **every** source. It 
 **No structured order is sent to WaterService — by design (settled, confirmed with the client).** The WaterService *chatbot* API (manual v1.0.1) has **no order / pedido / venta / abono creation endpoint** — its only writes are #6 (alta), #7 (contact), #3 (incident/ticket), and #20 (MercadoPago link). So the order travels as the **#3 ticket's `descripcion` note** (product summary, time window, amount to collect); CIMES staff/route then convert that note into the real pedido/venta *inside* WaterService. Do **not** look for an order endpoint or re-litigate this. **Scope boundary:** our responsibility ends when that note reaches WaterService correctly and completely — the send succeeding (dispatch cron running + verified live) and the note carrying the right fields are ours; everything downstream of the note is CIMES's.
 
 1. **Dedupe / existing-client check.** Before creating a client, look up an existing WaterService client by phone via **#2**. If found, reuse its `cliente_id` — do not create a duplicate alta.
-2. **Create client — #6** (`CrearNuevoClientePorChatBot`) using `reparto_id`, `listaDePreciosId`, and lat/lng **from the coverage (#12) result** → `cliente_id` (client created in `Borrador`). Store on the lead record as `waterservice_client_id`.
+2. **Create client — #6** (`CrearNuevoClientePorChatBot`) using `reparto_id` and lat/lng **from the coverage (#12) result**, and `listaDePreciosId` **from the city rule** (`resolveCityListId`, §2 — not #12) → `cliente_id` (client created in `Borrador`). Store on the lead record as `waterservice_client_id`.
 3. **Attach contact — #7** (`CreateContacto`): the WhatsApp number, `tipoContacto_ids:1`, `sector_ids:6`.
 4. **Schedule the driver ticket — #3 is NOT called here.** The pipeline stores the order (§4.6) with status `pending_dispatch`. The **dispatch scheduler** (daily cron) calls **#3** (`Incidentes/Save`, "Visita por alta") **the day BEFORE the delivery date**, reading the order's **current** state at that moment — so operator edits up to then are picked up (guardrail §13). Ticket fields at dispatch: assigned to the route's usual driver (`usuarioResponsable_id` from neighbors' `usuarioRepartidorHabitual`) or the responsible group; `descripcion` = product, time window, amount to collect; `fechaCierreEstimado` = delivery date (`dd/MM/yyyy`). **`ticket_id` exists only after dispatch** — the scheduler stores it on the order + lead record and updates the sheet row then. **See the driver-ticket note in §12.**
 5. **Append orders-sheet row** (§10).
@@ -240,7 +240,7 @@ The engine re-engages silent WhatsApp leads inside Meta's free 24h window. Whats
 Match `00-master.md §5.6` exactly. All are backend endpoints; WaterService/Sheets calls happen server-side.
 
 ### `GET /api/prices?city=<city>`
-Returns the catalog with **that city's** prices (via `PriceProvider.getCatalog(city)`). Never mixes two cities' lists.
+Returns the catalog with **that city's** prices (via `PriceProvider.getCatalog(city)`, which resolves the city's list via `resolveCityListId` — `CITY_PRICE_LIST_MAP` exception or `PRICE_LIST_DEFAULT_ID`). Never mixes two cities' lists. **This is the same list `POST /api/orders` charges — the quote equals the charge.**
 ```
 200 → {
   city: string,
@@ -256,7 +256,7 @@ Request:  { city: string, address: string, cross_streets?: string }
 200 →     {
   covered: boolean,
   coordinates: { lat: number, lng: number } | null,
-  price_list: string | null,          // location-based listaDePrecios_id
+  price_list: string | null,          // location-based listaDePrecios_id (informational — pricing is city-deterministic, §2)
   delivery_options: [                  // empty if not covered
     { route: string, weekday: string, time_window: string }
   ]
@@ -274,7 +274,7 @@ Emits a `coverage_checked` event.
 4. Mapping in `providers/geocoding.ts`:
    - `covered` = at least one neighbor within the radius.
    - `delivery_options` = every neighbor's `visitas`, deduped by `reparto_id + weekday` → `{ route, weekday, time_window }` (window built from `horarioMin/horarioMax`).
-   - `price_list` = the **nearest** neighbor's `listaDePrecios_id` (distance-sorted).
+   - `price_list` = the **nearest** neighbor's `listaDePrecios_id` (distance-sorted). **Informational only — pricing is city-deterministic (§2); the quote/charge never use this value.**
    - `coordinates` = the geocoded point (falls back to the nearest neighbor's).
 
 Everything here is **deterministic — the AI never decides coverage, delivery days, or price** (`00-master §6`); those come only from #12. Google Maps adapter path (`GEOCODING_PROVIDER=googlemaps`): geocode to coordinates, then coverage via **#4** by coordinates instead (§3).
@@ -284,7 +284,7 @@ Everything here is **deterministic — the AI never decides coverage, delivery d
 ### `POST /api/orders`
 Body: the full order. Runs the **order confirmation pipeline (§4.5)**: #6 client + #7 contact + #3 driver ticket (dispatched day-before by the scheduler) + orders-sheet row + label `cliente_cerrado`. **Idempotent per lead** (dedupe by phone via #2; safe to retry).
 
-Multi-item: the website sends `items: [{product, qty}]` (product = catalog name or id). The server resolves each against the city's price list (**prices never client-supplied**), sums the **total**, and stores the order as a single summary line (`product = "2x A, 1x B"`) with `price`/`amount_to_collect` = the total. This keeps the order one row / one ticket / one sheet row (the driver ticket lists the items as text). A single `product: string` is still accepted (legacy single-item / chatbot path). An item not in the price list → `422 { error: "unknown_product" }`.
+Multi-item: the website sends `items: [{product, qty}]` (product = catalog name or id). The server resolves each against the city's price list (**prices never client-supplied**), sums the **total**, and stores the order as a single summary line (`product = "2x A, 1x B"`) with `price`/`amount_to_collect` = the total. This keeps the order one row / one ticket / one sheet row (the driver ticket lists the items as text). A single `product: string` is still accepted (legacy single-item / chatbot path). An item not in the price list → `422 { error: "unknown_product" }`. An address with **no serving WaterService neighbours** (empty #12 result) → `422 { error: "address_not_covered" }` and the lead is labeled **`mal_lead`** (§11).
 ```
 Request:  {
   source: "whatsapp" | "web" | "instagram",
@@ -301,27 +301,28 @@ Request:  {
 }
 ```
 
-### `POST /api/waitlist`
-Uncovered-area lead capture for the website's "Otra ciudad" form (04-website §5). Create/update the lead by phone (#2), store the free-text zone in `city` and the optional comment in `notes`, set label `otra_ciudad`, and queue a lead-only orders-sheet row (same sheet job as Instagram leads). **No coverage check, no order pipeline.** Idempotent per phone (the sheet row dedupes on `sheet_waitlist:<lead_id>`).
+### `GET /api/cities`
+Returns the list of Buenos Aires province cities for the website's city autocomplete (`04-website §3`, the "Otra ciudad" free-text entry). Backed by `BA_CITIES` in `engine/cities.ts` (~130 cities). No side effects.
 ```
-Request:  {
-  source: "web",
-  name, phone, city,                    // city = free-text city/zone the visitor typed
-  comment?,                             // stored in the lead's notes
-  utm_source?, utm_medium?, utm_campaign?, utm_content?, utm_term?, fbclid?, gclid?
-}
-200 →     { ok: true }
+200 → { cities: string[] }
 ```
-Emits `lead_created` (only when the lead is new). No new label/event type — `otra_ciudad` and `lead_created` are the canonical existing values.
+
+### `POST /api/resolve-city`
+Fuzzy-snaps a free-text city to the closest real BA city via the shared **`matchCity()`** in `engine/cities.ts`. The website "Otra ciudad" entry calls this to normalize the typed city before the **normal order flow continues** (product → data → coverage → day → summary, exactly like a quick-pick city); the WhatsApp engine calls `matchCity` directly. **Never rejects** — when nothing is close it keeps the input as-is (`matched: false`) and returns the **1–3 closest real cities** in **`suggestions`** (best-first), which the website surfaces as "did you mean?" options (the user can still proceed with what they typed). No side effects.
+```
+Request:  { text: string }
+200 →     { city: string, matched: boolean, score: number, suggestions: string[] }
+```
+`suggestions` are **always real BA cities** (the closest candidate plus any near-equal runners-up), even when `matched:false`; a single `[city]` on a match, and `[]` only for empty input.
 
 ### `POST /api/manual-review`
-Covered-city / **no-delivery-time** capture (04-website §5). The website calls this at wizard step 4 when `/api/coverage` returns **zero offerable times in a covered city** (`covered:false`, or `covered:true` with empty `delivery_options`). Create/update the lead by phone, store name/address/cross-streets and a summarized `product` (`"2x A, 1x B"` from `items`), queue a lead-only sheet row (dedupe `sheet_manual_review:<lead_id>`), then run the shared **`enterManualReview`** step. Rejects out-of-city with `422 city_not_covered` (that belongs on `/api/waitlist`). Idempotent per phone.
+**No-delivery-time** capture (04-website §5). The website calls this at wizard step 4 when `/api/coverage` returns **zero offerable times** (`covered:false`, or `covered:true` with empty `delivery_options`) — for **any BA city**, since coverage is decided per-address now. Create/update the lead by phone, store name/address/cross-streets and a summarized `product` (`"2x A, 1x B"` from `items`), queue a lead-only sheet row (dedupe `sheet_manual_review:<lead_id>`), then run the shared **`enterManualReview`** step. Idempotent per phone.
 ```
 Request:  {
   source: "web",
   name, phone, city, address, cross_streets?,
   items: [{ product, qty }],
-  utm_source?, utm_medium?, ...            // same attribution block as /api/waitlist
+  utm_source?, utm_medium?, ...            // utm / attribution block
 }
 200 →     { ok: true }
 ```
@@ -391,8 +392,7 @@ This module **owns the data model and the auto-apply rules**; `03-crm.md` owns f
 | `interesado` | ≥ 2 user exchanges or asked prices |
 | `cliente_cerrado` | Confirmed order (order pipeline §4.5) |
 | `pedido_cerrado` | Delivered — **manual toggle only** in the CRM. Do **not** build auto-labeling from delivery notes / WaterService webhooks; that is a deliberate task boundary |
-| `mal_lead` | Operator-defined bad zone / unreachable address (incl. in-city coverage check with no neighbors) |
-| `otra_ciudad` | City outside coverage |
+| `mal_lead` | Operator-defined bad zone / unreachable address (incl. coverage check with no neighbors; `POST /api/orders` → `422 address_not_covered`) |
 | `derivado` | Human handoff triggered (§5) |
 
 ---
@@ -450,7 +450,8 @@ Subset of the master table (`00-master.md §8`); that table is the single source
 | `DEBT_THRESHOLD` | `0` | Minimum balance to trigger a reminder |
 | `DEBT_REMINDER_COOLDOWN_DAYS` | `14` | No repeat reminder within this many days |
 | `DEBT_REMINDER_SEND_HOUR` | `09` | Morning send hour |
-| `CITY_PRICE_LIST_MAP` | — | Provisional city→list for the first quote; final from #12 neighbors' `listaDePrecios_id` |
+| `PRICE_LIST_DEFAULT_ID` | — | Default price list (LISTA PRECIOS GENERAL) applied to every city unless overridden; `resolveCityListId` falls back here for unmapped cities (never throws) |
+| `CITY_PRICE_LIST_MAP` | — | Per-city price-list **exceptions** (e.g. Lobos → PRECIO LOBOS); cities not listed use `PRICE_LIST_DEFAULT_ID`. City-deterministic — quoted *and* charged |
 | `PRICES_SOURCE` | *(none — fully open)* | Selects `PriceProvider` impl (`waterservice` \| `sheet`). No forced default |
 | `PRICES_SHEET_ID` | — | Required if `PRICES_SOURCE=sheet` |
 | `OPERATOR_PHONE` | — | Handoff / failure / sheet-mismatch notifications to operator |
@@ -471,7 +472,7 @@ Backend-testable subset of `00-master.md` / PRD §12:
 2. **Follow-up sequence + reset (crit 2-bis logic).** A silent WhatsApp lead gets up to 3 stage-appropriate follow-ups inside the 24h window; a reply cancels pending timers and resets `followup_count`; after the 3rd unanswered follow-up the lead is labeled `sin_respuesta` and the bot stops. Respects `MAX_FOLLOWUP_CYCLES` and terminal/`derivado` exclusions.
 3. **Delivery-day options match manual lookup (crit 3).** For **10 sampled addresses across the covered cities (validation set provided by the client)**, `POST /api/coverage` returns the same route/weekday/time-window options the operator would find manually on the WaterService map.
 4. **Returning contact not re-asked (crit 4).** A contact from ≥ 1 week ago is loaded by phone and resumed from known data — no re-asking.
-5. **Out-of-coverage labeled (crit 5).** An out-of-coverage address is labeled (`otra_ciudad` for out-of-city, `mal_lead` for in-city no-neighbors) and answered politely without operator involvement.
+5. **Out-of-coverage handled (crit 5).** Any BA city is accepted at the city step; coverage is decided per-address. An address with **no serving neighbours** is labeled `mal_lead` (backend `POST /api/orders` → `422 address_not_covered`) or routed to manual review (`revision_cobertura` — website / WhatsApp coverage step, §9), and answered politely without operator involvement.
 6. **Handoff within 1 min (crit 6, backend side).** An unanswerable question sets `ai_enabled=false`, labels `derivado`, notifies the operator within 1 minute, and the user-facing message tells the user to write to `SUPPORT_NUMBER`.
 7. **WaterService outage → queued + notified + replay (crit 9).** A simulated WaterService outage during confirmation queues the order, notifies the operator, sets `sync_status=failed/pending`, and a later replay succeeds **without** creating duplicate clients/tickets.
 8. **Debt reminder eligibility (crit 11).** A client with balance `> DEBT_THRESHOLD` and a visit tomorrow gets one utility-template reminder in the morning; a client who **paid yesterday** does not (caught by the #21 re-check); a **suppressed** client never does.

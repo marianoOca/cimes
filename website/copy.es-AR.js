@@ -6,7 +6,7 @@ window.CIMES_COPY = {
   a11y: { skip: "Ir al alta automática" },
   nav: { signup: "Darme de alta" },
   hero: {
-    eyebrow: "Agua pura y protegida",
+    eyebrow: "Pureza Bien Protegida",
     title: "Agua y soda a domicilio, todas las semanas",
     subtitle:
       "Recibís bidones, soda y dispensers directo en tu puerta. Delivery sin costo.",
@@ -42,16 +42,17 @@ window.CIMES_COPY = {
     title: "Nuestros productos",
     note: "Los precios varían según tu ciudad: consultalos en el alta automática o por WhatsApp.",
     ctaLabel: "Consultar por WhatsApp",
-    // Real product photos from cimescentral.com (assets/products/*.webp).
     items: [
       { name: "Bidón retornable 12L", description: "12 litros para que dejes de fingir que tomás 2 por día.", image: "botellon-12l.webp" },
       { name: "Bidón retornable 20L", description: "20 litros: para cuando el de 12 te pareció poco compromiso.", image: "botellon-20l.webp" },
       { name: "Bidón 12L Menos Sodio", description: "Baja en sodio, alta en autoestima. Tu médico va a estar orgulloso.", image: "botellon-12l-ms.webp" },
-      { name: "Soda en sifón", description: "El sifón de toda la vida, para hacerte el gracioso en la sobremesa.", image: "soda-sifon.webp" },
-      { name: "Agua saborizada", description: "Agua disfrazada de premio para que los chicos no se den cuenta.", image: "saborizada.webp" },
-      { name: "Gaseosas 2,25L", description: "2,25 litros para el asado donde nunca falta nadie, salvo la dieta.", image: "gaseosas.webp" },
-      { name: "Agua en botellas", description: "Para cuando ni al bidón le tenés la paciencia de servir con vaso.", image: "agua-botellas.webp" },
-      { name: "Jugo en polvo", description: "Un sobrecito que rinde 2 litros, como las excusas de tu cuñado.", image: "jugo.webp" },
+      { name: "Bidón 20L Menos Sodio", description: "Baja en sodio, alta en autoestima. Tu médico va a estar orgulloso.", image: "botellon-12l-ms.webp" },
+      { name: "Soda en sifón", description: "1.5 L. Retornable. El sifón de toda la vida, para hacerte el gracioso en la sobremesa.", image: "soda-sifon.webp" },
+      { name: "Agua saborizada", description: "1.5 L. Agua disfrazada de premio para que los chicos no se den cuenta.", image: "saborizada.webp" },
+      { name: "Gaseosas", description: "2 L litros para el asado donde nunca falta nadie, salvo la dieta.", image: "gaseosas.webp" },
+      { name: "Agua en botellas", description: "2 L. Para cuando ni al bidón le tenés la paciencia de servir con vaso.", image: "agua-botellas.webp" },
+      { name: "Cimes Plus Isotónica", description: "750 ml (tipo powerade)", image: "isotonica.webp" },
+      // TODO: agegar sabores para saborizada, gaseosa e isotónica
     ],
   },
   trust: {
@@ -77,6 +78,7 @@ window.CIMES_COPY = {
       "Chivilcoy",
       "Campana",
       "Zárate",
+      "Escobar",
     ],
     // Argentine mobile area codes per covered city (for the phone-field prefill/mask).
     areaCodes: {
@@ -87,6 +89,7 @@ window.CIMES_COPY = {
       "Chivilcoy": "2346",
       "Campana": "3489",
       "Zárate": "3487",
+      "Escobar": "0348",
     },
   },
   footer: {
@@ -107,21 +110,20 @@ window.CIMES_COPY = {
     stepOf: (n) => `Paso ${n} de 5`,
     waFallback: "Probá escribinos por WhatsApp",
     successHint: "Guardá esta confirmación. Ante cualquier duda, escribinos por WhatsApp.",
-    cityStep: { title: "¿De qué ciudad sos?", other: "Otra ciudad" },
-    // Waitlist form (/alta?waitlist=1): capture contact for uncovered zones.
-    waitlist: {
-      title: "Dejanos tus datos",
-      intro:
-        "Todavía no llegamos a tu zona, pero estamos sumando ciudades. Dejanos tu contacto y te avisamos apenas lleguemos.",
-      name: "Nombre",
-      phone: "Teléfono (WhatsApp)",
-      zone: "¿De qué ciudad o zona sos?",
-      zonePlaceholder: "Ej: Navarro, Buenos Aires",
-      comment: "Comentario (opcional)",
-      submit: "Avisame cuando lleguen",
-      sending: "Enviando…",
-      successTitle: "¡Listo!",
-      success: "Te anotamos 🙌. Te escribimos apenas sumemos tu zona.",
+    // Shortcut cities are the quick picks; "other" is the free-text entry that
+    // snaps to the closest BA city and continues the normal flow.
+    cityStep: {
+      title: "¿De qué ciudad sos?",
+      other: "Otra Ciudad",
+      otherPlaceholder: "Ej: Necochea",
+      otherSubmit: "Continuar",
+      // Second thought when the typed city isn't in our list: offer the 1–3
+      // closest real cities, but let the user proceed with what they typed
+      // (coverage decides). `didYouMean` is appended to `notInList` on one line
+      // when there are suggestions.
+      notInList: (city) => `No encontramos «${city}» en nuestra lista.`,
+      didYouMean: "¿Quisiste decir…?",
+      proceedAnyway: (city) => `Continuar igual con «${city}»`,
     },
     productStep: {
       title: "Elegí tus productos",

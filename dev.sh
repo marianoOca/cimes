@@ -49,9 +49,10 @@ if [ "$MODE" = "--real" ] || [ "$MODE" = "real" ]; then
   pids+=($!)
   BACKEND="http://localhost:$REAL_PORT"
 else
-  echo "backend: STUB on :$API_PORT  (fake data; nothing real is written)"
+  echo "backend: STUB on :$API_PORT  (real app logic incl. city matching; external"
+  echo "         WaterService/Sheets faked — nothing real is written)"
   free_port "$API_PORT"
-  PORT="$API_PORT" node dev/stub-backend.mjs &
+  ( cd src && PORT="$API_PORT" npm run dev:stub ) &
   pids+=($!)
   BACKEND="http://localhost:$API_PORT"
 fi

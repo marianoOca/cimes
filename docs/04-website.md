@@ -4,7 +4,7 @@
 
 This module owns the **public static website** for CIMES: a marketing landing that mirrors the structure and conversion patterns of a competitor site, plus a **full on-page self-service signup wizard (Flow B)** that takes a visitor from city selection to a confirmed order **without any WhatsApp interaction and with zero operator input**.
 
-The website is a **pure consumer** of the backend. It renders UI and calls three REST endpoints owned by `01-core-api.md`. It contains **no business logic of its own** — no price computation, no coverage rules, no WaterService calls. Everything deterministic happens server-side behind the endpoints in §4.
+The website is a **pure consumer** of the backend. It renders UI and calls a few REST endpoints owned by `01-core-api.md` (§4). It contains **no business logic of its own** — no price computation, no coverage rules, no WaterService calls. Everything deterministic happens server-side behind the endpoints in §4.
 
 **Workspace:** the site lives in `website/` (`website/CONTEXT.md`), deployed to Hostinger separately from the backend. Log sessions in `PROGRESS.md` — scaffold rules in `00-master.md §4.1`.
 
@@ -44,7 +44,7 @@ The landing is a single mobile-first page (traffic is mostly Instagram mobile). 
 
 6. **Trust section** — quality of the product, retornables / environmental angle (returnable bottles), weekly service reliability. Static copy + imagery.
 
-7. **Coverage areas** — list the 7 covered cities: **Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate**. Static display (this is marketing reassurance; the authoritative coverage check is the live one in the wizard, §3 step 4).
+7. **Coverage areas** — feature the main service cities: **Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate, Escobar**. Static display (marketing reassurance; **any Buenos Aires province city is served** — the authoritative coverage check is the live per-address one in the wizard, §3 step 4).
 
 8. **Testimonials** — 3 client testimonials. **The client provides the 3 testimonials** (text + optional name/photo). Build the section with 3 placeholder slots wired to the copy module so the real ones drop in without code changes.
 
@@ -60,7 +60,11 @@ This is the core deliverable of the module. The **entire** signup completes on t
 
 ### Wizard steps (in order)
 
-1. **City select.** Visitor picks one of the 7 covered cities. (If the site chooses to offer an "otra ciudad" option, handle it per §5 — no-coverage.)
+1. **City select.** Visitor picks one of the 8 quick-pick cities, or uses **"Otra ciudad"** — an inline **free-text field with a native autocomplete** (`GET /api/cities`, ~130 BA cities); its **Continuar** button stays disabled until a city is typed. On submit the typed city is resolved via **`POST /api/resolve-city`**, with two outcomes:
+   - **Recognized** (exact or a typo within the match floor, e.g. `nechochea`) → snapped to the canonical city and the wizard **continues the normal flow** (priced catalog → data → coverage → day → summary) exactly like a quick-pick.
+   - **Unrecognized** (a genuine non-place, e.g. `monte chico`) → **no dead-end.** An inline **second thought** appears — one line, *"No encontramos «…». ¿Quisiste decir…?"* — followed by the **1–3 closest real cities** as one-tap links (`suggestions` from the endpoint), plus a **"Continuar igual con «<typed>»"** link that proceeds with the **typed text as-is**. Coverage decides downstream; a real non-place fails coverage at step 4 and is saved for the future (§5). After a submit the **Continuar** button stays disabled (no re-click on the same text); editing the field re-enables it.
+
+   **Any BA province city is accepted; the list is advisory, not a gate** — coverage is decided later at step 4. A direct `/alta/?city=<unknown>` link is de-slugged and proceeds silently (the nudge lives only in the typing flow), never bouncing back to the picker.
 
 2. **Priced catalog (multi-item cart).** On city selection, call **`GET /api/prices?city=<city>`** and render the product catalog **with that city's prices** as a card grid (product image + price + a quantity stepper). The response is the catalog for exactly one city's price list — **render it as returned; never mix or cache another city's prices**. The visitor can add **quantities of several products** (a running total is shown) before continuing; prices are formatted with a thousands separator. Product images are mapped from the product name to the local `assets/products/*.webp` photos (CIMES logo fallback when nothing matches).
 
@@ -93,6 +97,8 @@ These endpoints are **owned and implemented by `01-core-api.md`**. This module o
 
 | Endpoint | Website usage |
 |---|---|
+| `GET /api/cities` | Wizard step 1. Returns the ~130 BA-province cities for the "Otra ciudad" free-text autocomplete. |
+| `POST /api/resolve-city` | Wizard step 1. Snaps the typed "Otra ciudad" text to the closest real BA city; the wizard then continues the normal flow. |
 | `GET /api/prices?city=<city>` | Wizard step 2. Returns the product catalog with that city's prices (one city's price list only, never mixed). Render as returned. |
 | `POST /api/coverage` | Wizard step 4. Body: composed address + city. Returns `covered` (boolean), resolved coordinates, price list id, and available delivery-day options (each: route + weekday + time window). Site renders the day options on `covered: true`; runs §5 on `covered: false`. |
 | `POST /api/orders` | Wizard step 5 (confirm). Body: full order — `name` (nombre + apellido), `phone`, `city`, `address` (calle + altura), `cross_streets` (entre calles), `product`, chosen `delivery_day` + `delivery_window`, and **`source: "web"`**. Triggers the shared confirmation pipeline (see `01-core-api.md`). Idempotent per lead — a double-submit of the same order must not create two altas. Site must guard the confirm button against double-clicks regardless. |
@@ -106,10 +112,8 @@ These endpoints are **owned and implemented by `01-core-api.md`**. This module o
 When the address cannot be served, the flow does **not** dead-end — it ends politely and still records the lead so the operator/analytics see it.
 
 - **Polite on-page message.** Show a friendly "no llegamos a tu zona todavía" style message (from the es-AR copy module). No error state, no operator handoff prompt on the site.
-- **Lead is still recorded.** The lead is saved to the orders sheet with the appropriate coverage-failure label so it is not lost:
-  - **City outside the 7 covered cities** → label **`otra_ciudad`** (canonical terminal label, `00-master.md` §5.3). In the city picker, **"Otra ciudad"** is a link to the focused waitlist form at **`/alta/?waitlist=1`** (name, WhatsApp, free-text city/zone, optional comment). Submitting POSTs to **`POST /api/waitlist`** (`01-core-api.md` §9), which records the `otra_ciudad` lead + sheet row so the operator can reach out when the zone is added.
-  - **Address inside a covered city but no delivery time can be offered** — `covered: false`, **or** `covered: true` with **zero `delivery_options`** (no serviceable neighbor/route), **or** two consecutive upstream failures on the coverage check (see the flow below). This is the **manual-review handoff**, not a dead end. On this result at wizard step 4 the website POSTs the full lead (name, phone, address, cart) to **`POST /api/manual-review`** (`01-core-api.md` §9). The backend saves the lead, labels it **`revision_cobertura`** (`00-master.md` §5.3), turns the **AI off** (`ai_enabled = false`), mirrors it to Chatwoot (conversation set `open` + a private note with the case detail) and **pings the operator**. The page then shows a friendly message + a **WhatsApp button** — a deep link to the sales number whose prefilled text carries the **`[REV-COB]`** sentinel — so a human can decide "te podemos tomar" / "no llegamos". The **same handoff fires in the WhatsApp bot flow** when its coverage step yields zero delivery options (`01-core-api.md` §4.5). (The old `mal_lead` dead-end for this case is replaced by this flow.)
-- **How the lead gets recorded:** recording is a backend concern; the website only sends the lead data. Out-of-city uses **`POST /api/waitlist`**; covered-but-no-time uses **`POST /api/manual-review`** (both above).
+- **Lead is still recorded.** When the address has **no serving neighbour/route** — `covered: false`, **or** `covered: true` with **zero `delivery_options`**, **or** two consecutive upstream failures on the coverage check (see the flow below) — this is the **manual-review handoff**, not a dead end. On this result at wizard step 4 the website POSTs the full lead (name, phone, address, cart) to **`POST /api/manual-review`** (`01-core-api.md` §9). The backend saves the lead, labels it **`revision_cobertura`** (`00-master.md` §5.3), turns the **AI off** (`ai_enabled = false`), mirrors it to Chatwoot (conversation set `open` + a private note with the case detail) and **pings the operator**. The page then shows a friendly message + a **WhatsApp button** — a deep link to the sales number whose prefilled text carries the **`[REV-COB]`** sentinel — so a human can decide "te podemos tomar" / "no llegamos". The **same handoff fires in the WhatsApp bot flow** when its coverage step yields zero delivery options (`01-core-api.md` §4.5). **Because any BA province city is accepted at the city step (§3 step 1), this path applies to any city with no serving neighbours** — the old out-of-city `otra_ciudad` / `POST /api/waitlist` branch is gone (its "Otra ciudad" picker option is now the free-text city entry), as is the old `mal_lead` dead-end for this case.
+- **How the lead gets recorded:** recording is a backend concern; the website only sends the lead data via **`POST /api/manual-review`** (above).
 
 **Step-4 coverage-check flow (the full decision tree).** A `503` is "couldn't check", not "not covered" — so a transient WaterService failure gets **one retry** before it hands off, and lead capture fires **only when the WhatsApp button appears** (never on the retry screen), which is what keeps a recovered retry from saving a phantom `revision_cobertura` lead:
 
@@ -168,7 +172,7 @@ The browser needs its **own** Maps key — see `GOOGLE_MAPS_KEY` in §9.
 ### SEO
 
 - **Per-page meta + Open Graph tags** (title, description, OG title/description/image) on every page.
-- **JSON-LD `LocalBusiness`** structured data (name, areas served = the 7 cities, contact, social profiles).
+- **JSON-LD `LocalBusiness`** structured data (name, areas served = Buenos Aires province / the main cities, contact, social profiles).
 - **Keyword targets** woven into copy/meta, e.g. *"soda a domicilio Mercedes"*, *"dispenser de agua Luján"*, *"bidones de agua Campana"* (and equivalents for the other covered cities).
 - **`sitemap.xml` + `robots.txt`.**
 
@@ -197,7 +201,7 @@ Subset of the system acceptance criteria (`00-master.md` / PRD), scoped to the w
 
 2. **(crit 8 — deploy, performance, CTAs)** The site is **deployed on Hostinger**, achieves **mobile Lighthouse ≥ 90**, and **both CTAs are functional** — "Alta automática" opens the working on-page wizard, and "Alta por WhatsApp" opens a `wa.me` chat to the sales number with the prefilled message.
 
-3. **No-coverage path works** (§5): an out-of-coverage submission shows the polite on-page message and the lead is recorded to the sheet with the correct canonical label (`otra_ciudad` for a non-covered city; `mal_lead` for a covered-city address that fails the live check) — with no operator involvement.
+3. **No-coverage path works** (§5): a submission whose address has **no serving neighbour** shows the polite on-page message and records the lead with the canonical label **`revision_cobertura`** (via `POST /api/manual-review`) — AI off, operator pinged — with no operator involvement needed to capture it. This applies to **any BA city** (no separate out-of-city branch); the **"Otra ciudad"** free-text entry snaps a recognized city (`POST /api/resolve-city`) and continues the normal flow, or — for an unrecognized city — shows a **second thought** (did-you-mean + "continuar igual") and still proceeds with the typed city, which lands here (`revision_cobertura`) if it fails coverage. A genuine non-place never dead-ends the picker.
 
 4. **Priced catalog is city-correct:** the wizard's catalog step shows only the selected city's prices (from `GET /api/prices?city=`) and never mixes two cities' price lists.
 

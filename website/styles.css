@@ -259,7 +259,7 @@ main > section h2::after {
   font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 0.5rem;
 }
 .wizard-hint { text-align: center; color: var(--muted); font-size: 0.9rem; margin-top: 0.85rem; }
-/* Intro paragraph on the waitlist form (uncovered-zone lead capture). */
+/* Intro paragraph utility for wizard steps. */
 .wizard-intro { color: var(--muted); margin-bottom: 1.2rem; line-height: 1.55; }
 
 /* Numbered stepper (rosmino-style progress): a labeled circle per wizard step. */
@@ -308,6 +308,46 @@ main > section h2::after {
 /* City options are links (they navigate to /alta/?city=…); chevron signals the hop. */
 .option-list .city-option::after { content: "\203A"; color: var(--celeste-2); font-size: 1.4rem; line-height: 1; }
 .option-list .price { font-weight: 700; color: var(--blue); font-variant-numeric: tabular-nums; }
+
+/* "Otra Ciudad" option, once clicked, becomes an input styled exactly like the
+   other options (it already carries .city-option); these tune it for editing. */
+.option-list input.city-option { display: block; width: 100%; text-align: left; cursor: text; }
+.option-list input.city-option::placeholder { color: var(--muted); } /* example in grey */
+.option-list input.city-option:focus {
+  outline: none; border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(var(--blue-rgb), 0.12);
+}
+/* The red submit, revealed only after "Otra Ciudad" is clicked. The id+attr
+   selector overrides `.btn { display: inline-flex }`, which otherwise beats the
+   UA `[hidden] { display: none }` and would show the button too early. */
+#city-other-submit { width: 100%; margin-top: 0.8rem; }
+#city-other-submit[hidden] { display: none; }
+
+/* Second thought when the typed city isn't recognized: a "did you mean?" plus a
+   "continuar igual" — both are links styled like the picker options (.city-option
+   in an .option-list, chevron and all). Sits just under the submit. */
+.city-second-thought { margin-top: 0.8rem; }
+.city-second-thought .status-msg { padding: 0 0.25rem 0.6rem; text-align: left; color: var(--slate); }
+
+/* Custom "Otra Ciudad" suggestions dropdown — styled from the site tokens so it
+   matches the picker (the native <datalist> is unstyleable). */
+.city-combobox { position: relative; }
+.city-suggestions {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 30;
+  margin: 0; padding: 0.35rem; list-style: none;
+  background: #fff; border: 1.5px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); max-height: 264px; overflow-y: auto;
+}
+.city-suggestions:empty { display: none; }
+.city-suggestions li {
+  display: flex; align-items: center; min-height: 44px;
+  padding: 0.55rem 0.85rem; border-radius: 8px; cursor: pointer;
+  font-family: var(--font-body); font-size: 1rem; color: var(--ink);
+  transition: background 0.12s, color 0.12s;
+}
+.city-suggestions li.is-active, .city-suggestions li:hover {
+  background: var(--celeste-050); color: var(--blue);
+}
 
 .field { margin-bottom: 1rem; }
 .field label { display: block; font-size: 0.9rem; font-weight: 600; color: var(--slate); margin-bottom: 0.35rem; }
