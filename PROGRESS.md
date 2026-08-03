@@ -483,3 +483,14 @@ Continuar disabled until typed + stays disabled after submit, matched → no nud
 **Scope:** website only — WhatsApp mirror deferred. **Known gap (pre-existing):** a typed unknown
 city that *passes* coverage reaches dispatch with `centroDistribucionId: 0` (unmapped
 `WS_CENTRO_DISTRIBUCION_MAP`, `pipeline/dispatch.ts`) — rare; separate follow-up.
+
+**Website monolith split (2026-08-03).** `website/app.js` (1263 lines) → 10 `js/*.js` files,
+**no behavior change**. Classic scripts (no build — buildless static on Hostinger), each an IIFE
+attaching to one shared `window.CIMES_APP` namespace, loaded via ordered `<script>` tags; `/alta`
+omits `js/home.js`. Files: `util`, `tracking`, `chrome` (shared page chrome, both pages),
+`home` (index-only marketing), `phone`, `places`, `cities` (slug/list/resolve + "Otra ciudad"
+combobox + did-you-mean), `wizard` (state/persistence/render helpers), `steps`, `main` (boot). Chose
+classic-namespace over ES modules to keep the jsdom+eval test harness + zero tooling (rationale in
+the plan). `app.js` **deleted** — the per-file map is in `website/CONTEXT.md`. Test harness evals the
+ordered list (`website.test.ts`). typecheck clean, **90 tests** (unchanged; pure reorg). Earlier
+PROGRESS entries that say `app.js` are historical — the wizard now lives in `website/js/`.

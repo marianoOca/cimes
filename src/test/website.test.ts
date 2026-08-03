@@ -15,6 +15,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const websiteDir = join(dirname(fileURLToPath(import.meta.url)), "../../website");
 const read = (f: string) => readFileSync(join(websiteDir, f), "utf8");
 
+// app.js was split into ordered js/ files (one shared window.CIMES_APP namespace).
+// Eval them in <script>-tag order, exactly as index.html / alta/index.html load them.
+// Home marketing (js/home.js) is index-only; /alta omits it.
+const CORE = ["js/util.js", "js/tracking.js", "js/chrome.js"];
+const WIZARD = [
+  "js/phone.js", "js/places.js", "js/cities.js", "js/wizard.js", "js/steps.js", "js/main.js",
+];
+function evalApp(w: { eval(code: string): void }, file: string) {
+  w.eval(read("config.js"));
+  w.eval(read("copy.es-AR.js"));
+  const files = file === "index.html" ? [...CORE, "js/home.js", ...WIZARD] : [...CORE, ...WIZARD];
+  for (const f of files) w.eval(read(f));
+}
+
 const catalog = {
   city: "Luján",
   price_list: "5",
@@ -41,9 +55,7 @@ function buildPage(fetchImpl: Fetch, url = "https://www.cimes.com.ar/", file = "
     ok: true,
     json: async () => fetchImpl(u, init),
   }));
-  w.eval(read("config.js"));
-  w.eval(read("copy.es-AR.js"));
-  w.eval(read("app.js"));
+  evalApp(w, file);
   return dom;
 }
 
@@ -57,9 +69,7 @@ function buildRawPage(
   const dom = new JSDOM(read("alta/index.html"), { url, runScripts: "outside-only" });
   const w = dom.window as unknown as { eval(code: string): void; fetch: unknown };
   w.fetch = vi.fn(async (u: string, init?: RequestInit) => fetchFn(u, init));
-  w.eval(read("config.js"));
-  w.eval(read("copy.es-AR.js"));
-  w.eval(read("app.js"));
+  evalApp(w, "alta/index.html");
   return dom;
 }
 
@@ -588,8 +598,9 @@ describe("website: Flow B wizard", () => {
     await tick();
     click(dom, '[data-option="0"]'); // reached the summary; option now persisted
 
-    // A same-tab reload keeps sessionStorage: re-running app.js re-boots the page.
-    evalIn(dom, read("app.js"));
+    // A same-tab reload keeps sessionStorage: re-running the app scripts re-boots
+    // the page (fresh in-memory state; sessionStorage persists the furthest step).
+    for (const f of [...CORE, ...WIZARD]) evalIn(dom, read(f));
     await tick();
 
     const txt = dom.window.document.querySelector("#wizard-root")!.textContent!;

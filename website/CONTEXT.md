@@ -7,25 +7,30 @@ endpoint contracts: `docs/00-master.md §5.6`.
 ## Layout
 
 `index.html` (landing + wizard mount), `alta/index.html` (focused wizard page) — both
-mount an empty `#wizard-root`; `app.js` renders everything into it. `copy.es-AR.js` (all
-strings, keyed like the backend module), `config.js` (`API_BASE_URL`), `styles.css`, `assets/`.
+mount an empty `#wizard-root`; the ordered `js/` scripts render everything into it.
+`copy.es-AR.js` (all strings, keyed like the backend module), `config.js` (`API_BASE_URL`),
+`styles.css`, `assets/`.
 
-`app.js` is one file, organized by name (grep the name, not a line):
+The wizard is split into `js/*.js` classic scripts (no build step; buildless static on
+Hostinger). Each is an IIFE attaching its public surface to one shared `window.CIMES_APP`
+namespace; load order matters only for `config.js`/`copy.es-AR.js` (first) and `main.js`
+(last). Loaded via `<script>` tags in this order — `/alta` omits `home.js`:
 
-- **Boot router** (bottom): reads `?city` → picks the entry step (picker when absent; a
-  non-shortcut slug is snapped to a canonical city via `POST /api/resolve-city`).
-- **`steps` object** — the wizard screens: `city` (shortcut links + an "Otra ciudad"
-  free-text entry with `<datalist>` autocomplete that snaps to the closest BA city),
-  `product`, `data`, `day`, `summary`; plus `enterManualReview()` (no-coverage / no-slot handoff).
-- **`state` object** — `city`, `cart`, `data`, `option`, `coverage`, `attribution`.
-- **Helpers** — `citySlug`/`slugToCity` (URL ⇄ city), `fetchCities`/`resolveCityFromSlug`
-  (BA-city autocomplete + snap), `utmQS`/`attribution` (paid-social),
-  phone mask (`phoneField`/`phoneToE164`/`phoneModeOf`), `attachPlaces`/`loadGoogleMaps`
-  (Google address autocomplete), `track` (dataLayer), `esc`/`field`/`progress`/`bindBack` (render).
-- **Backend calls** — `GET /api/prices`, `POST /api/coverage`, `POST /api/orders`,
-  `POST /api/manual-review`, `GET /api/cities`, `POST /api/resolve-city`. Local dev fakes
-  them: `dev/stub-backend.ts` (real app logic incl. the city matcher; only the
-  external WaterService/Sheets calls are faked — run via `npm run dev:stub`).
+- `js/util.js` — core handles (`COPY`/`CFG`/`API`/`waHref`) + `esc`, `resolvePath`.
+- `js/tracking.js` — `track` (dataLayer/Pixel), `attribution`, `utmQS`, delegated CTA/WA click tracking.
+- `js/chrome.js` — shared page chrome (both pages): `[data-copy]` bind, `.wa-link` hrefs, footer, scroll-float, bottom-bg.
+- `js/home.js` — **index only**: how-steps, product grid + carousel, trust cards.
+- `js/phone.js` — masked phone field (`phoneField`, `phoneDigitsFromE164`).
+- `js/places.js` — Google Maps/Places address autocomplete (`loadGoogleMaps`, `attachPlaces`).
+- `js/cities.js` — `citySlug`/`slugToCity`, `fetchCities`/`resolveCityFromSlug`, and the "Otra ciudad" combobox + "did you mean?" second thought (`initCityOther`).
+- `js/wizard.js` — shared wizard internals: `state`/`root`/`W`, persistence, formatting, render helpers (`progress`/`bindBack`/…), `enterManualReview`, `startWizard`.
+- `js/steps.js` — the `steps` object: `city` (thin) → `product` → `data` → `day` → `summary`.
+- `js/main.js` — boot router: reads `?city` → picker (absent) / resume / snap a non-shortcut slug via `POST /api/resolve-city`.
+
+Backend calls (in `api`/`cities`/`wizard`/`steps`): `GET /api/prices`, `POST /api/coverage`,
+`POST /api/orders`, `POST /api/manual-review`, `GET /api/cities`, `POST /api/resolve-city`.
+Local dev fakes them: `dev/stub-backend.ts` (real app logic incl. the city matcher; only the
+external WaterService/Sheets calls are faked — run via `npm run dev:stub`).
 
 ## Process
 
