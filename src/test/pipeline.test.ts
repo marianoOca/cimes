@@ -20,7 +20,7 @@ vi.mock("../src/waterservice/client.js", () => ({
 }));
 
 import { openDb } from "../src/db/db.js";
-import { createLead, getLeadById, updateLead } from "../src/db/leads.js";
+import { createLead, getLeadById, updateLead, type Dispenser } from "../src/db/leads.js";
 import { confirmOrder } from "../src/pipeline/orders.js";
 import { handleDispatchOrder } from "../src/pipeline/dispatch.js";
 import { getOrder, updatePendingOrder } from "../src/db/orders.js";
@@ -147,6 +147,31 @@ describe("dispatch scheduler (01 §4.5/§4.6)", () => {
     expect(ws.crearTicket).toHaveBeenCalledWith(
       expect.objectContaining({ usuarioResponsableId: 13886, grupoResponsableIds: null }),
     );
+  });
+
+  // The ticket body tells the repartidor which dispenser to bring, so the
+  // comodato line is the one part of it worth pinning per dispenser value.
+  async function dispatchBody(dispenser: Dispenser): Promise<string> {
+    const db = openDb(":memory:");
+    const lead = updateLead(db, readyLead(db).lead_id, { dispenser });
+    const { order } = await confirmOrder(db, lead.lead_id);
+    updatePendingOrder(db, order.id, { delivery_date: localDatePlusDays(1) });
+    await handleDispatchOrder({ order_id: order.id }, db);
+    return vi.mocked(ws.crearTicket).mock.calls.at(-1)![0].descripcionHtml;
+  }
+
+  it("leads the ticket with the frío/calor comodato", async () => {
+    expect(await dispatchBody("frio_calor")).toMatch(/^<p>Cliente nuevo frío calor<\/p>/);
+  });
+
+  it("leads the ticket with the natural comodato", async () => {
+    expect(await dispatchBody("natural")).toMatch(/^<p>Cliente nuevo natural<\/p>/);
+  });
+
+  it("omits the comodato line entirely when there is no dispenser", async () => {
+    const body = await dispatchBody("ninguno");
+    expect(body).not.toContain("Cliente nuevo");
+    expect(body.match(/<p>/g)).toHaveLength(3); // Cobrar / Producto / Horario
   });
 
   it("skips orders not due tomorrow (edited away)", async () => {

@@ -16,7 +16,7 @@
     dispenser: null, // "natural" | "frio_calor" | "ninguno"
     waterType: null, // "comun" | "bajo_sodio" (null when dispenser === "ninguno")
     cart: null, // [{ id, name, price, qty }]: multi-item selection
-    data: null, // { firstName, lastName, phone, street, number, crossStreets }
+    data: null, // { firstName, lastName, phone, direccion, piso, crossStreets }
     coverage: null,
     option: null,
     submitting: false,
@@ -75,6 +75,11 @@
     return waterType === "bajo_sodio" ? "Botellón 20L Bajo Sodio" : "Botellón 20L";
   };
   App.ABONO_INCLUDED_BOTTLES = 4;
+
+  /** True for the four botellón SKUs, whatever the water type. */
+  App.isBottle = function isBottle(name) {
+    return ALL_BOTTLES.indexOf(name) >= 0;
+  };
 
   /** The catalog as this dispenser + water choice is allowed to see it. */
   App.visibleProducts = function visibleProducts(products, dispenser, waterType) {
@@ -197,7 +202,7 @@
   App.loadingPanel = loadingPanel;
 
   App.coverageLoading = function coverageLoading() {
-    return progress(5) + `<h3>${W.dayStep.title}</h3>` + loadingPanel(W.dayStep.checking);
+    return progress(4) + `<h3>${W.dayStep.title}</h3>` + loadingPanel(W.dayStep.checking);
   };
 
   // Covered city, but nothing we can offer automatically (no serviceable slot, or the
@@ -228,10 +233,10 @@
       }),
     }).catch(() => {});
     root.innerHTML =
-      progress(5) +
+      progress(4) +
       `<h3>${W.manualReview.title}</h3>` +
       `<p class="status-msg">${W.manualReview.message}</p>` +
-      `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
+      `<div class="wizard-actions"><button class="btn btn-secondary" data-back="product">${W.back}</button>` +
       `<a class="btn btn-whatsapp" data-wa-loc="manual_review" target="_blank" rel="noopener" href="${waHrefReview}">${W.manualReview.button}</a></div>`;
     bindBack();
   };
@@ -241,22 +246,25 @@
     state.city = city;
     track("wizard_start", { city });
     const saved = loadState();
-    if (saved && saved.city === city) {
-      state.dispenser = saved.dispenser || null;
-      state.waterType = saved.waterType || null;
-      state.cart = saved.cart || null;
-      state.data = saved.data || null;
-      state.option = saved.option || null;
-      const hasCart = state.cart && state.cart.length;
-      // The cart is only meaningful under the dispenser choice that filtered it,
-      // so a saved cart without one drops back to the dispenser step.
-      if (!state.dispenser) App.steps.dispenser();
-      else if (hasCart && state.data && state.option) App.steps.summary();
-      else if (hasCart && state.data) App.steps.day();
-      else if (hasCart) App.steps.data();
-      else App.steps.product();
-    } else {
-      App.steps.dispenser();
+    // Who they are and where they live doesn't change when they change city, so it
+    // survives the switch — retyping a name and phone is the one thing the Cambiar
+    // button must not cost. Everything after it is priced per city, so it doesn't.
+    state.data = (saved && saved.data) || null;
+    if (!saved || saved.city !== city) {
+      App.steps.data();
+      return;
     }
+    state.dispenser = saved.dispenser || null;
+    state.waterType = saved.waterType || null;
+    state.cart = saved.cart || null;
+    state.option = saved.option || null;
+    const hasCart = state.cart && state.cart.length;
+    // The cart is only meaningful under the dispenser choice that filtered it,
+    // so a saved cart without one drops back to the dispenser step.
+    if (!state.data) App.steps.data();
+    else if (!state.dispenser) App.steps.dispenser();
+    else if (hasCart && state.option) App.steps.summary();
+    else if (hasCart) App.steps.day();
+    else App.steps.product();
   };
 })(window.CIMES_APP = window.CIMES_APP || {});

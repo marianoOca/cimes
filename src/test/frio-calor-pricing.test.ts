@@ -147,3 +147,67 @@ describe("getAbono", () => {
     expect(getAbono("Luján", "comun", openDb(":memory:"))).toBeNull();
   });
 });
+
+// The daily gap alert (index.ts `prices_refresh`). Only GENERAL has to carry all 9
+// SKUs — every zone list layers on top of it, so a hole there is a hole in every
+// city. Zone lists are expected to be partial; alerting on them would fire daily.
+describe("checkCatalogCompleteness", () => {
+  const AT = "2026-08-01T00:00:00Z";
+  const ALL_NINE = [
+    { id: "13", name: "10013  -  BOTELLON 20L", price: 8500 },
+    { id: "12", name: "10012  -  BOTELLON 12L", price: 6000 },
+    { id: "15", name: "10015  -  BOTELLON 20L NA", price: 8900 },
+    { id: "14", name: "10014  -  BOTELLON 12L NA", price: 6400 },
+    { id: "20", name: "10020  -  SIFON 1 1/2L", price: 1600 },
+    { id: "21", name: "10021  -  AGUA SABORIZADA 1.5 L", price: 1800 },
+    { id: "22", name: "10022  -  GASEOSAS 2 L", price: 2400 },
+    { id: "23", name: "10023  -  AGUA 2L", price: 800 },
+    { id: "24", name: "10024  -  CIMES PLUS ISOTONICA 750 ml", price: 2100 },
+  ];
+
+  async function check(lists: Record<string, { id: string; name: string; price: number }[]>) {
+    const { writeList } = await import("../src/db/prices-cache.js");
+    const { checkCatalogCompleteness, WaterServicePriceProvider } = await import(
+      "../src/providers/prices.js"
+    );
+    const db = openDb(":memory:");
+    for (const [listId, products] of Object.entries(lists)) {
+      writeList(db, listId, products, AT);
+    }
+    return checkCatalogCompleteness(new WaterServicePriceProvider(db));
+  }
+
+  it("stays quiet when GENERAL carries all 9, however partial the zone lists are", async () => {
+    const gaps = await check({
+      [GENERAL]: ALL_NINE,
+      [LOBOS]: [{ id: "13", name: "BOTELLON 20L", price: 8000 }],
+      [CAMPANA]: [{ id: "13", name: "BOTELLON 20L", price: 9500 }],
+    });
+    expect(gaps).toEqual([]);
+  });
+
+  it("names the SKUs GENERAL is missing", async () => {
+    const gaps = await check({
+      [GENERAL]: ALL_NINE.filter((p) => p.id !== "22" && p.id !== "24"),
+      [LOBOS]: [{ id: "13", name: "BOTELLON 20L", price: 8000 }],
+      [CAMPANA]: [{ id: "13", name: "BOTELLON 20L", price: 9500 }],
+    });
+    const { SKUS } = await import("../src/catalog/skus.js");
+    const display = (key: string) => SKUS.find((s) => s.key === key)!.display;
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toContain(`lista ${GENERAL}`);
+    expect(gaps[0]).toContain(display("gaseosa"));
+    expect(gaps[0]).toContain(display("isotonica"));
+    // The two partial zone lists are not the alert's business.
+    expect(gaps[0]).not.toContain(`lista ${LOBOS}`);
+  });
+
+  it("reports a zone list that can't be resolved at all", async () => {
+    const gaps = await check({
+      [GENERAL]: ALL_NINE,
+      [LOBOS]: [{ id: "1014", name: "Sanitizacion de Dispenser", price: 9000 }],
+      [CAMPANA]: [{ id: "13", name: "BOTELLON 20L", price: 9500 }],
+    });
+    expect(gaps).toEqual([`lista ${LOBOS}: no se pudo resolver`]);
+  });
+});

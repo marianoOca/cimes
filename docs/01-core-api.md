@@ -329,12 +329,27 @@ Returns the list of Buenos Aires province cities for the website's city autocomp
 ```
 
 ### `POST /api/resolve-city`
-Fuzzy-snaps a free-text city to the closest real BA city via the shared **`matchCity()`** in `engine/cities.ts`. The website "Otra ciudad" entry calls this to normalize the typed city before the **normal order flow continues** (product → data → coverage → day → summary, exactly like a quick-pick city); the WhatsApp engine calls `matchCity` directly. **Never rejects** — when nothing is close it keeps the input as-is (`matched: false`) and returns the **1–3 closest real cities** in **`suggestions`** (best-first), which the website surfaces as "did you mean?" options (the user can still proceed with what they typed). No side effects.
+Fuzzy-snaps a free-text city to the closest real BA city via the shared **`matchCity()`** in `engine/cities.ts`. The website "Otra ciudad" entry calls this to normalize the typed city before the **normal order flow continues** (data → dispenser → product → coverage/day → summary, exactly like a quick-pick city); the WhatsApp engine calls `matchCity` directly. **Never rejects** — when nothing is close it keeps the input as-is (`matched: false`) and returns the **1–3 closest real cities** in **`suggestions`** (best-first), which the website surfaces as "did you mean?" options (the user can still proceed with what they typed). No side effects.
 ```
 Request:  { text: string }
 200 →     { city: string, matched: boolean, score: number, suggestions: string[] }
 ```
 `suggestions` are **always real BA cities** (the closest candidate plus any near-equal runners-up), even when `matched:false`; a single `[city]` on a match, and `[]` only for empty input.
+
+### `POST /api/leads`
+**Early lead capture** (04-website §5). The website calls this when its **first** wizard step — the delivery-data form — is submitted, before a dispenser, a cart or a coverage result exist; hence no `items` and no dispenser fields. Without it nothing about a visitor was persisted until the coverage call several screens later, so every drop-out in between was lost.
+
+Create/update the lead by phone (`leads.phone` is UNIQUE — the endpoint is idempotent for free), store name/city/address/cross-streets, set `stage: "datos_entrega"`, and emit `lead_created` with the attribution block on first sight. **That is all it does.** No sheet row, no Chatwoot mirror, no WaterService call, and no follow-up timers (those are scheduled only from an inbound WhatsApp message) — a half-finished web form must not page anyone. Stage is set explicitly rather than derived: `stageFromKnownData` assumes product-before-address and would call an address-but-no-cart lead `producto`.
+
+The caller treats this as fire-and-forget and never blocks on the response.
+```
+Request:  {
+  source: "web",
+  name, phone, city, address, cross_streets?,
+  utm_source?, utm_medium?, ...            // utm / attribution block
+}
+200 →     { ok: true }
+```
 
 ### `POST /api/manual-review`
 **No-delivery-time** capture (04-website §5). The website calls this at wizard step 4 when `/api/coverage` returns **zero offerable times** (`covered:false`, or `covered:true` with empty `delivery_options`) — for **any BA city**, since coverage is decided per-address now. Create/update the lead by phone, store name/address/cross-streets and a summarized `product` (`"2x A, 1x B"` from `items`), queue a lead-only sheet row (dedupe `sheet_manual_review:<lead_id>`), then run the shared **`enterManualReview`** step. Idempotent per phone.

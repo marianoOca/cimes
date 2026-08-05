@@ -11,19 +11,20 @@
     const key = App.CFG.GOOGLE_MAPS_KEY;
     if (!key || key === "GOOGLE_MAPS_KEY") return;
     mapsRequested = true;
+    // `loading=async` REQUIRES the callback parameter — that is the only hook Maps
+    // guarantees to fire after the API is initialized. The script's own `onload` is
+    // too early: at that point `google` and `google.maps` exist but
+    // `google.maps.importLibrary` is still undefined, so a load-time bind silently
+    // does nothing and the field is left unbound forever (no dropdown, no error, no
+    // network call). Do not "simplify" this back to s.onload.
+    window.__cimesMapsReady = function () {
+      window.google.maps.importLibrary("places").then(attachPlaces);
+    };
     const s = document.createElement("script");
     s.async = true;
     s.src =
       "https://maps.googleapis.com/maps/api/js?key=" + key +
-      "&libraries=places&language=es&region=AR&loading=async";
-    // With loading=async the script's onload resolves before the places library
-    // is materialized, so google.maps.places is still undefined at that point.
-    // importLibrary("places") waits for it, then attachPlaces() can bind.
-    s.onload = () => {
-      const maps = window.google && window.google.maps;
-      if (maps && maps.importLibrary) maps.importLibrary("places").then(attachPlaces);
-      else attachPlaces();
-    };
+      "&libraries=places&language=es&region=AR&loading=async&callback=__cimesMapsReady";
     document.head.appendChild(s);
   }
   App.loadGoogleMaps = loadGoogleMaps;
@@ -59,26 +60,33 @@
     // strictBounds behavior) so streets from other cities don't show. Falls back to
     // country-only if the city geocode fails; the backend coverage check is the
     // authority on the address anyway.
-    let restrict = null;
-    if (App.state.city && window.google.maps.Geocoder) {
+    //
+    // Started, NOT awaited: the address field is now the wizard's first screen, so
+    // awaiting the geocode here would attach the input listener a second late and
+    // silently swallow whatever the visitor typed in the meantime. run() awaits this
+    // instead, so the very first query is still restricted — just briefly slower.
+    const restrictReady = (async function resolveRestrict() {
+      if (!App.state.city || !window.google.maps.Geocoder) return null;
       try {
         const r = await new window.google.maps.Geocoder().geocode({
           address: App.state.city + ", Provincia de Buenos Aires, Argentina",
         });
         const c = r.results && r.results[0] && r.results[0].geometry && r.results[0].geometry.location;
-        if (c) {
-          const lat = c.lat();
-          const lng = c.lng();
-          const dLat = 20000 / 111320;
-          const dLng = 20000 / (111320 * Math.cos((lat * Math.PI) / 180));
-          restrict = { north: lat + dLat, south: lat - dLat, east: lng + dLng, west: lng - dLng };
-        }
-      } catch (e) { /* fall back to country-only */ }
-    }
+        if (!c) return null;
+        const lat = c.lat();
+        const lng = c.lng();
+        const dLat = 20000 / 111320;
+        const dLng = 20000 / (111320 * Math.cos((lat * Math.PI) / 180));
+        return { north: lat + dLat, south: lat - dLat, east: lng + dLng, west: lng - dLng };
+      } catch (e) {
+        return null; // fall back to country-only
+      }
+    })();
 
     const close = () => { box.hidden = true; box.innerHTML = ""; };
 
     async function choose(pred) {
+      const typed = input.value;
       const place = pred.toPlace();
       try {
         await place.fetchFields({ fields: ["addressComponents", "location", "formattedAddress"] });
@@ -87,8 +95,15 @@
       (place.addressComponents || []).forEach((c) =>
         (c.types || []).forEach((t) => { comp[t] = c.longText; }),
       );
-      const line = [comp.route, comp.street_number].filter(Boolean).join(" ");
-      input.value = line || place.formattedAddress || input.value;
+      // A pick only replaces the visitor's text when it carries the street NUMBER.
+      // Google answers "Arribeños 444" with the street itself whenever 444 is not a
+      // known address point: the place then has a route and no street_number (and a
+      // formattedAddress for the street), so writing either back silently deleted
+      // the number they typed. Their text is never worse than a numberless pick.
+      const line = comp.street_number
+        ? [comp.route, comp.street_number].filter(Boolean).join(" ")
+        : "";
+      input.value = line || typed;
       if (place.location) {
         input.dataset.lat = place.location.lat();
         input.dataset.lng = place.location.lng();
@@ -104,6 +119,8 @@
       const req = {
         input: text, includedRegionCodes: ["ar"], language: "es", region: "AR", sessionToken: token,
       };
+      const restrict = await restrictReady;
+      if (mine !== seq) return; // superseded while the city geocode was still resolving
       if (restrict) req.locationRestriction = restrict;
       let res;
       try {

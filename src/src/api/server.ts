@@ -14,6 +14,7 @@ import { normalizeInbound, verifyKapsoSignature } from "../kapso/webhook.js";
 import { sendText } from "../kapso/send.js";
 import { confirmOrder, maybeSendWebConfirmation } from "../pipeline/orders.js";
 import { handleInstagramLead, verifyMetaSignature } from "./instagram.js";
+import { recordWebLead } from "./leads.js";
 import { recordManualReviewLead } from "./manual-review.js";
 import { resolveCartLines } from "./orders-cart.js";
 import { frioCalorPricing } from "./frio-calor.js";
@@ -24,6 +25,27 @@ const dispenserFields = {
   dispenser: z.enum(["natural", "frio_calor", "ninguno"]).optional(),
   water_type: z.enum(["comun", "bajo_sodio"]).optional(),
 };
+
+/** Paid-social attribution, captured client-side from the ad click. Always optional. */
+const attributionFields = {
+  utm_source: z.string().optional(),
+  utm_medium: z.string().optional(),
+  utm_campaign: z.string().optional(),
+  utm_content: z.string().optional(),
+  utm_term: z.string().optional(),
+  fbclid: z.string().optional(),
+  gclid: z.string().optional(),
+};
+type AttributionBody = { [K in keyof typeof attributionFields]?: string };
+const pickAttribution = (b: AttributionBody) => ({
+  utm_source: b.utm_source,
+  utm_medium: b.utm_medium,
+  utm_campaign: b.utm_campaign,
+  utm_content: b.utm_content,
+  utm_term: b.utm_term,
+  fbclid: b.fbclid,
+  gclid: b.gclid,
+});
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -120,6 +142,33 @@ export function buildServer(db: DB): FastifyInstance {
     };
   });
 
+  // Early lead capture (04-website §5): the wizard calls this the moment its first
+  // step (delivery data) is submitted, long before a cart or a coverage result
+  // exists — hence no `items` and no dispenser fields here. Fire-and-forget on the
+  // client, keyed by phone server-side, so a repeat submit updates one lead.
+  app.post("/api/leads", async (req) => {
+    const body = z
+      .object({
+        source: z.literal("web").default("web"),
+        name: z.string().min(1),
+        phone: z.string().min(5),
+        city: z.string().min(1),
+        address: z.string().min(1),
+        cross_streets: z.string().optional(),
+        ...attributionFields,
+      })
+      .parse(req.body);
+    recordWebLead(db, {
+      name: body.name,
+      phone: body.phone,
+      city: body.city,
+      address: body.address,
+      cross_streets: body.cross_streets,
+      attribution: pickAttribution(body),
+    });
+    return { ok: true };
+  });
+
   // No-delivery-time capture (04-website §5): the website calls this when
   // /api/coverage comes back with zero offerable times. Saves the lead and hands
   // it to a human (AI off, `revision_cobertura`, Chatwoot + operator ping). Any
@@ -138,13 +187,7 @@ export function buildServer(db: DB): FastifyInstance {
           z.object({ product: z.string().min(1), qty: z.number().int().positive() }),
         ),
         ...dispenserFields,
-        utm_source: z.string().optional(),
-        utm_medium: z.string().optional(),
-        utm_campaign: z.string().optional(),
-        utm_content: z.string().optional(),
-        utm_term: z.string().optional(),
-        fbclid: z.string().optional(),
-        gclid: z.string().optional(),
+        ...attributionFields,
       })
       .parse(req.body);
     await recordManualReviewLead(db, {
@@ -154,15 +197,7 @@ export function buildServer(db: DB): FastifyInstance {
       address: body.address,
       cross_streets: body.cross_streets,
       items: body.items,
-      attribution: {
-        utm_source: body.utm_source,
-        utm_medium: body.utm_medium,
-        utm_campaign: body.utm_campaign,
-        utm_content: body.utm_content,
-        utm_term: body.utm_term,
-        fbclid: body.fbclid,
-        gclid: body.gclid,
-      },
+      attribution: pickAttribution(body),
     });
     return { ok: true };
   });
@@ -186,14 +221,7 @@ export function buildServer(db: DB): FastifyInstance {
         ...dispenserFields,
         delivery_day: z.string().min(1),
         delivery_window: z.string().default(""),
-        // Paid-social attribution (optional; captured client-side from the ad click).
-        utm_source: z.string().optional(),
-        utm_medium: z.string().optional(),
-        utm_campaign: z.string().optional(),
-        utm_content: z.string().optional(),
-        utm_term: z.string().optional(),
-        fbclid: z.string().optional(),
-        gclid: z.string().optional(),
+        ...attributionFields,
       })
       // A frío/calor abono is a complete order by itself — the comodato is the
       // purchase and it already includes the month's botellones.
@@ -204,15 +232,7 @@ export function buildServer(db: DB): FastifyInstance {
       )
       .parse(req.body);
 
-    const attribution = {
-      utm_source: body.utm_source,
-      utm_medium: body.utm_medium,
-      utm_campaign: body.utm_campaign,
-      utm_content: body.utm_content,
-      utm_term: body.utm_term,
-      fbclid: body.fbclid,
-      gclid: body.gclid,
-    };
+    const attribution = pickAttribution(body);
 
     const { lead: created, created: isNew } = getOrCreateLead(db, {
       phone: body.phone,
@@ -235,6 +255,9 @@ export function buildServer(db: DB): FastifyInstance {
       address: body.address,
       cross_streets: body.cross_streets,
       product: body.product,
+      // Normalized, not passed through: zod leaves the key absent for the
+      // WhatsApp/legacy callers, and the column is NOT NULL.
+      dispenser: body.dispenser ?? "ninguno",
       delivery_day: body.delivery_day,
       delivery_window: body.delivery_window,
     });

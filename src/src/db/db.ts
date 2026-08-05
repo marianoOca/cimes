@@ -49,6 +49,8 @@ function migrate(db: DB): void {
       notes TEXT NOT NULL DEFAULT '',
       coverage_json TEXT,
       location_attempts INTEGER NOT NULL DEFAULT 0,
+      dispenser TEXT NOT NULL DEFAULT 'ninguno'
+        CHECK (dispenser IN ('natural','frio_calor','ninguno')),
       archived INTEGER NOT NULL DEFAULT 0,
       last_message_at TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -149,6 +151,12 @@ function migrate(db: DB): void {
   );
   if (!leadCols.has("location_attempts")) {
     db.exec("ALTER TABLE leads ADD COLUMN location_attempts INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!leadCols.has("dispenser")) {
+    db.exec(
+      "ALTER TABLE leads ADD COLUMN dispenser TEXT NOT NULL DEFAULT 'ninguno' " +
+        "CHECK (dispenser IN ('natural','frio_calor','ninguno'))",
+    );
   }
 }
 

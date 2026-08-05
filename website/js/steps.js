@@ -1,5 +1,7 @@
-// The Flow B wizard steps: 1 city → 2 dispenser → 3 product → 4 data → 5 day →
-// 6 summary. Shared internals (state, render primitives, persistence) come from
+// The Flow B wizard steps: 1 data → 2 dispenser → 3 product → 4 day → 5 summary.
+// `city` sits outside that numbering — it's the picker shown on the home page and
+// on a bare /alta, and it navigates to /alta/?city=<slug> rather than advancing.
+// Shared internals (state, render primitives, persistence) come from
 // wizard.js; the city autocomplete from cities.js; phone mask from phone.js;
 // address autocomplete from places.js. Assembled onto App.steps for
 // wizard.startWizard / main to drive.
@@ -13,6 +15,7 @@
   const enterManualReview = App.enterManualReview;
   const money = App.money, addressString = App.addressString, productImage = App.productImage;
   const dispenserImage = App.dispenserImage, visibleProducts = App.visibleProducts;
+  const isBottle = App.isBottle;
   const abonoPricing = App.abonoPricing, abonoBottle = App.abonoBottle;
   const INCLUDED = App.ABONO_INCLUDED_BOTTLES;
   const saveState = App.saveState, clearState = App.clearState;
@@ -37,6 +40,27 @@
     }
   }
 
+  // Early lead capture (04 §5): the visitor's contact + address, saved the moment
+  // the data step is submitted, so an abandoned signup is still reachable. Keyed by
+  // phone server-side, so re-submitting (or finishing the order later) updates the
+  // same lead rather than duplicating it. Best-effort — the wizard never waits on it
+  // and never surfaces a failure; nothing downstream depends on it having landed.
+  function saveLead() {
+    fetch(`${API}/api/leads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "web",
+        name: `${state.data.firstName} ${state.data.lastName}`,
+        phone: state.data.phone,
+        city: state.city,
+        address: addressString(state.data),
+        cross_streets: state.data.crossStreets,
+        ...attribution,
+      }),
+    }).catch(() => {});
+  }
+
   /** "Dispenser Frío/Calor · Bajo en sodio" for the summary row. */
   function dispenserLabel() {
     const d = W.dispenserStep;
@@ -46,16 +70,16 @@
   }
 
   const steps = {
-    // 1. City select. Shortcut cities are real links to the focused /alta page.
+    // City select — not a numbered step: it routes to /alta/?city=<slug>, where the
+    // wizard proper starts at `data`. Shortcut cities are real links to that page.
     // "Otra Ciudad" is the last option and looks identical to the rest; clicking
     // it turns that same slot into an inline combobox (see cities.js). Enter or the
     // button snaps the typed city to the closest real BA city and continues the
     // normal flow — coverage is decided later.
     city() {
-      track("wizard_step", { step: "city", n: 1 });
+      track("wizard_step", { step: "city", n: 0 });
       const c = W.cityStep;
       root.innerHTML =
-        progress(1) +
         `<h3>${c.title}</h3><div class="option-list">` +
         COPY.coverage.cities
           .map((city) => `<a class="city-option" href="/alta/?city=${citySlug(city)}${utmQS()}">${esc(city)}</a>`)
@@ -76,7 +100,7 @@
       const d = W.dispenserStep;
       root.innerHTML = progress(2) + `<h3>${d.title}</h3>` + loadingPanel(W.productStep.loading);
       if (!(await loadPrices())) {
-        root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + deadEndActions("city");
+        root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + deadEndActions("data");
         bindBack();
         return;
       }
@@ -166,7 +190,7 @@
         // Natural alone when the abono can't be priced.
         `<div class="dispenser-grid">${frioCalorCard}${naturalCard}${noneCard}</div>` +
         `<p class="step-error" data-dispenser-error hidden>${esc(d.errors.required)}</p>` +
-        `<div class="wizard-actions"><button class="btn btn-secondary" data-back="city">${W.back}</button>` +
+        `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
         `<button class="btn btn-primary" id="dispenser-continue">${esc(d.continue)}</button></div>`;
       bindBack();
 
@@ -228,7 +252,7 @@
           root.innerHTML =
             progress(2) + `<h3>${d.title}</h3>` + loadingPanel(W.productStep.loading);
           if (!(await loadPrices("frio_calor"))) {
-            root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + deadEndActions("city");
+            root.innerHTML = `<p class="status-msg">${W.genericError}</p>` + deadEndActions("data");
             bindBack();
             return;
           }
@@ -243,12 +267,6 @@
     // choice allows (rendered as returned otherwise).
     async product() {
       track("wizard_step", { step: "product", n: 3 });
-      // Start loading Google Maps here — one step before the address field needs it. On
-      // /alta this is the first render (loads on arrival); on the landing page it only
-      // fires once the visitor engages the wizard, keeping first paint light for bouncers.
-      // By the time step 4 renders, the Places API is ready and attachPlaces() binds
-      // synchronously (no race). Guarded by mapsRequested, so it loads at most once.
-      loadGoogleMaps();
       if (!state.catalog) {
         root.innerHTML =
           progress(3) + `<h3>${W.productStep.title}</h3>` + loadingPanel(W.productStep.loading);
@@ -265,6 +283,12 @@
       );
       const abono = state.dispenser === "frio_calor" ? abonoPricing() : null;
       const includedName = abono ? abonoBottle(state.waterType) : null;
+      // The natural comodato is free, so unlike frío/calor (whose abono is itself
+      // the purchase) it is not an order on its own — the botellones are. Skipped
+      // if this city's price list offers no botellón at all, which would otherwise
+      // make the requirement unsatisfiable and dead-end the funnel.
+      const requireBottle =
+        state.dispenser === "natural" && products.some((p) => isBottle(p.name));
       // Preserve prior quantities when returning to this step (e.g. Back from data).
       const qty = {};
       (state.cart || []).forEach((c) => {
@@ -299,31 +323,42 @@
       root.innerHTML =
         progress(3) +
         `<h3>${W.productStep.title}</h3>` +
+        (requireBottle ? `<p class="wizard-intro">${esc(W.productStep.naturalHint)}</p>` : "") +
         `<div class="wizard-cart">${cards}</div>` +
         `<div class="cart-bar"><span class="cart-total-label">${
           abono ? W.productStep.subtotalProducts : W.productStep.total
         }</span>` +
         `<span class="cart-total" data-cart-total></span></div>` +
+        (requireBottle
+          ? `<p class="step-error" data-cart-error hidden>${esc(
+              W.productStep.errors.bottleRequired,
+            )}</p>`
+          : "") +
         `<div class="wizard-actions"><button class="btn btn-secondary" data-back="dispenser">${W.back}</button>` +
         `<button class="btn btn-primary" id="cart-continue">${W.productStep.continue}</button></div>`;
       bindBack();
 
       const totalEl = root.querySelector("[data-cart-total]");
       const continueBtn = document.getElementById("cart-continue");
+      const errorEl = root.querySelector("[data-cart-error]");
+      let bottleCount = 0;
       const refresh = () => {
         // Products only — the bottles the abono doesn't already cover. The abono
         // itself is added at the summary, where the two are shown side by side.
         let total = 0;
         let count = 0;
+        bottleCount = 0;
         products.forEach((p, i) => {
           const n = qty[i] || 0;
           const free = p.name === includedName ? Math.min(n, INCLUDED) : 0;
           total += p.price * (n - free);
           count += n;
+          if (isBottle(p.name)) bottleCount += n;
         });
         totalEl.textContent = money(total);
         // The abono alone is a valid order — the dispenser is the purchase.
         continueBtn.disabled = count === 0 && !abono;
+        if (errorEl && bottleCount > 0) errorEl.hidden = true;
       };
       refresh();
       root.querySelectorAll("[data-inc]").forEach((b) =>
@@ -349,6 +384,13 @@
         const cart = products
           .map((p, i) => ({ id: p.id, name: p.name, price: p.price, qty: qty[i] || 0 }))
           .filter((c) => c.qty > 0);
+        // Soda alone with a natural dispenser is the reachable mistake: the button
+        // is enabled (the cart isn't empty), so say what's missing rather than
+        // advancing to an order that gives the repartidor a dispenser and no water.
+        if (requireBottle && bottleCount === 0) {
+          errorEl.hidden = false;
+          return;
+        }
         // An abono on its own is a complete order; anything else needs a product.
         if (!cart.length && !abono) return;
         state.cart = cart;
@@ -357,13 +399,16 @@
           total: cart.reduce((s, c) => s + c.price * c.qty, 0),
         });
         saveState();
-        steps.data();
+        steps.day();
       });
     },
 
-    // 4. Delivery-data form with client-side validation.
+    // 1. Delivery-data form with client-side validation. First screen of the wizard:
+    // the city arrives in the URL, so it's shown as a header row (with a way back to
+    // the picker) instead of occupying a step of its own. Submitting saves the lead
+    // server-side — everything after this point is recoverable if the visitor drops.
     data() {
-      track("wizard_step", { step: "data", n: 4 });
+      track("wizard_step", { step: "data", n: 1 });
       const d = W.dataStep;
       const prev = state.data || {};
       // Matched on the slug, not the literal name: an unresolved ?city arrives
@@ -381,17 +426,24 @@
         `<input id="${id}" value="${esc(value || "")}" ${attrs || ""} />` +
         `<span class="error">${d.errors.required}</span></div>`;
       const phone = phoneField("phone", d.phone, initialDigits);
+      // A real link, not a data-back handler: ?city= is still in the URL, so rendering
+      // the picker in place would be undone by the next reload. utmQS() is built to
+      // follow ?city=…, hence the leading & swapped for a ?.
+      const pickerHref = "/alta/" + utmQS().replace(/^&/, "?");
       root.innerHTML =
-        progress(4) +
+        progress(1) +
         `<h3>${d.title}</h3>` +
-        `<p class="wizard-city">${esc(d.cityLabel)}: <strong>${esc(state.city)}</strong></p>` +
+        `<div class="wizard-city">` +
+        `<span>${esc(d.cityLabel)}: <strong>${esc(state.city)}</strong></span>` +
+        `<a class="wizard-city-change" href="${pickerHref}">${esc(d.change)}</a>` +
+        `</div>` +
         field("firstName", d.firstName, prev.firstName, 'autocomplete="given-name" autocapitalize="words"') +
         field("lastName", d.lastName, prev.lastName, 'autocomplete="family-name" autocapitalize="words"') +
         phone.html +
         field("direccion", d.direccion, prev.direccion, `autocomplete="off" autocapitalize="words" placeholder="${esc(d.direccionPlaceholder)}"`) +
         field("piso", d.piso, prev.piso, 'autocomplete="off"') +
         field("crossStreets", d.crossStreets, prev.crossStreets, 'autocomplete="off" autocapitalize="words"') +
-        `<div class="wizard-actions"><button class="btn btn-secondary" data-back="product">${W.back}</button>` +
+        `<div class="wizard-actions">` +
         `<button class="btn btn-primary" id="data-next">${d.next}</button></div>`;
       bindBack();
       loadGoogleMaps();
@@ -419,7 +471,8 @@
         values.phone = phoneApi.toE164();
         state.data = values;
         saveState();
-        steps.day();
+        saveLead();
+        steps.dispenser();
       });
     },
 
@@ -427,7 +480,7 @@
     // `attempt` escalates a transient failure: attempt 1 offers one retry, attempt 2 (retry
     // also failed) hands off to a human like a genuine no-slot answer (04 §5).
     async day(attempt = 1) {
-      track("wizard_step", { step: "day", n: 5 });
+      track("wizard_step", { step: "day", n: 4 });
       root.innerHTML = coverageLoading();
       try {
         const res = await fetch(`${API}/api/coverage`, {
@@ -447,10 +500,10 @@
           // First transient failure — offer one retry before giving up on the auto flow.
           track("coverage_retry", { attempt });
           root.innerHTML =
-            progress(5) +
+            progress(4) +
             `<h3>${W.coverageRetry.title}</h3>` +
             `<p class="status-msg">${W.coverageRetry.message}</p>` +
-            `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
+            `<div class="wizard-actions"><button class="btn btn-secondary" data-back="product">${W.back}</button>` +
             `<button class="btn btn-primary" data-retry="1">${W.coverageRetry.button}</button></div>`;
           bindBack();
           root
@@ -469,7 +522,7 @@
       }
       track("coverage_result", { covered: true, options: state.coverage.delivery_options.length });
       root.innerHTML =
-        progress(5) +
+        progress(4) +
         `<h3>${W.dayStep.title}</h3><div class="option-list">` +
         state.coverage.delivery_options
           .map(
@@ -480,7 +533,7 @@
           )
           .join("") +
         `</div>` +
-        backButton("data");
+        backButton("product");
       bindBack();
       root.querySelectorAll("[data-option]").forEach((b) =>
         b.addEventListener("click", () => {
@@ -491,9 +544,9 @@
       );
     },
 
-    // 6. Summary + confirm (double-click guarded).
+    // 5. Summary + confirm (double-click guarded).
     summary() {
-      track("wizard_step", { step: "summary", n: 6 });
+      track("wizard_step", { step: "summary", n: 5 });
       const s = W.summaryStep;
       // Same split as the server's resolveCartLines: the bottles the abono
       // doesn't already cover, then the discounted first month. With an abono the
@@ -517,7 +570,7 @@
       const products = lines.reduce((sum, l) => sum + l.amount, 0);
       const total = products + (abono ? abono.abono_first_month : 0);
       root.innerHTML =
-        progress(6) +
+        progress(5) +
         `<h3>${s.title}</h3><ul class="summary-list">` +
         lines
           .map(

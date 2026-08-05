@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import type { DB } from "./db.js";
 
 export type Source = "whatsapp" | "web" | "instagram";
+/**
+ * Which dispenser the customer takes on comodato. The driver ticket leads with
+ * this so the repartidor knows what to bring; `ninguno` also covers the WhatsApp
+ * flow, which never asks (bottles only).
+ */
+export type Dispenser = "natural" | "frio_calor" | "ninguno";
 export type Stage =
   | "inicio"
   | "producto"
@@ -40,6 +46,7 @@ export interface Lead {
   address: string;
   cross_streets: string;
   product: string;
+  dispenser: Dispenser;
   price: number | null;
   price_list: string;
   route: string;
@@ -120,6 +127,7 @@ const UPDATABLE = new Set([
   "address",
   "cross_streets",
   "product",
+  "dispenser",
   "price",
   "price_list",
   "route",

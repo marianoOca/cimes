@@ -3,7 +3,7 @@
 //
 // The signup flow is split across two pages that share app.js (URL-driven boot):
 //   - index.html  → no ?city → renders the city picker (links to /alta/?city=<slug>)
-//   - alta/index.html?city=<slug> → boots straight to the product step
+//   - alta/index.html?city=<slug> → boots straight to the data step (wizard step 1)
 // jsdom has no window.google, so the Direccion field is a plain text input here
 // (Google Places attaches only when the Maps SDK is present in the browser).
 import { existsSync, readFileSync } from "node:fs";
@@ -83,10 +83,13 @@ type Fetch = (url: string, init?: RequestInit) => Promise<unknown>;
 function buildPage(fetchImpl: Fetch, url = "https://www.cimes.com.ar/", file = "index.html") {
   const dom = new JSDOM(read(file), { url, runScripts: "outside-only" });
   const w = dom.window as unknown as { eval(code: string): void; fetch: unknown };
-  w.fetch = vi.fn(async (u: string, init?: RequestInit) => ({
-    ok: true,
-    json: async () => fetchImpl(u, init),
-  }));
+  // The stub runs when fetch is called, not when json() is awaited: the data step's
+  // lead capture is fire-and-forget and never reads the body, so a lazy stub would
+  // never see it.
+  w.fetch = vi.fn(async (u: string, init?: RequestInit) => {
+    const body = fetchImpl(u, init);
+    return { ok: true, json: async () => body };
+  });
   evalApp(w, file);
   return dom;
 }
@@ -100,7 +103,11 @@ function buildRawPage(
   const url = `https://www.cimes.com.ar/alta/?city=${citySlug}`;
   const dom = new JSDOM(read("alta/index.html"), { url, runScripts: "outside-only" });
   const w = dom.window as unknown as { eval(code: string): void; fetch: unknown };
-  w.fetch = vi.fn(async (u: string, init?: RequestInit) => fetchFn(u, init));
+  // The data step's lead capture is answered here rather than in every caller: these
+  // tests are about coverage escalation, and the callers throw on an unexpected URL.
+  w.fetch = vi.fn(async (u: string, init?: RequestInit) =>
+    u.includes("/api/leads") ? { ok: true, json: async () => ({ ok: true }) } : fetchFn(u, init),
+  );
   evalApp(w, "alta/index.html");
   return dom;
 }
@@ -173,15 +180,30 @@ function pickProduct(dom: JSDOM, i = 0, qty = 1) {
   click(dom, "#cart-continue");
 }
 
+// From a just-submitted data step through to the day picker: the dispenser step
+// (none), one product, then the coverage call the product step now triggers. Used
+// by tests that care about what the data step sent, not about the steps between.
+async function continueToDay(dom: JSDOM) {
+  await tick(); // prices, for the dispenser step
+  pickProduct(dom);
+  await tick(); // coverage
+}
+
 describe("website: Flow B wizard", () => {
   let orders: unknown[];
+  let leads: unknown[];
 
   // Cities the "Otra ciudad" autocomplete/snap knows about in these tests.
   const KNOWN_CITIES = ["Necochea", "Navarro", "Tandil", "Lobos"];
 
   function stub(coverage: unknown = coverageOk): Fetch {
     orders = [];
+    leads = [];
     return (url: string, init?: RequestInit) => {
+      if (url.includes("/api/leads")) {
+        leads.push(JSON.parse(String(init?.body)));
+        return Promise.resolve({ ok: true });
+      }
       if (url.includes("/api/prices")) return Promise.resolve(catalog);
       if (url.includes("/api/coverage")) return Promise.resolve(coverage);
       if (url.includes("/api/cities")) return Promise.resolve({ cities: KNOWN_CITIES });
@@ -207,19 +229,26 @@ describe("website: Flow B wizard", () => {
     };
   }
 
-  // Boot the dedicated /alta page for a valid city → the dispenser step once the
-  // prices fetch resolves, then straight through it with "Sin dispenser" so the
-  // product step looks exactly as it did before step 2 existed.
+  // Boot the dedicated /alta page for a valid city. That lands on the data step
+  // (step 1); fill it, then pass the dispenser step with "Sin dispenser" — which
+  // leaves the catalog unfiltered — so the product step looks exactly as it did
+  // before either of those steps sat in front of it.
   async function bootToProduct(fetchImpl: Fetch, query = "", citySlug = "lujan") {
-    const dom = buildPage(fetchImpl, `https://www.cimes.com.ar/alta/?city=${citySlug}${query}`, "alta/index.html");
+    const dom = await bootToData(fetchImpl, query, citySlug);
+    fillAndSubmitData(dom);
     await tick();
     passDispenser(dom);
     return dom;
   }
-  // Same as bootToProduct, but for the ghost-mask tests that need to match the
-  // spec's literal Mercedes (area 2324) examples rather than Luján's.
-  async function bootToProductForCity(fetchImpl: Fetch, citySlug: string) {
-    const dom = buildPage(fetchImpl, `https://www.cimes.com.ar/alta/?city=${citySlug}`, "alta/index.html");
+  // Boot to the data step and stop there — the first screen for a valid ?city. The
+  // tick is only load-bearing for an unrecognized slug (resolved via /api/resolve-city);
+  // a shortcut city renders synchronously.
+  async function bootToData(fetchImpl: Fetch, query = "", citySlug = "lujan") {
+    const dom = buildPage(
+      fetchImpl,
+      `https://www.cimes.com.ar/alta/?city=${citySlug}${query}`,
+      "alta/index.html",
+    );
     await tick();
     return dom;
   }
@@ -235,7 +264,6 @@ describe("website: Flow B wizard", () => {
 
   async function runHappyPath(dom: JSDOM) {
     pickProduct(dom);
-    fillAndSubmitData(dom);
     await tick();
     click(dom, '[data-option="0"]');
     click(dom, "#confirm");
@@ -325,16 +353,23 @@ describe("website: Flow B wizard", () => {
     await tick();
     const doc = dom.window.document;
     expect(doc.querySelectorAll("#wizard-root a.city-option")).toHaveLength(0); // not the picker
+    // De-slugged into the data step's city header, and the flow proceeds normally.
+    expect(doc.querySelector(".wizard-city")!.textContent).toContain("Monte Chico");
+    type(dom, "firstName", "Ana");
+    type(dom, "lastName", "Prueba");
+    typeDigits(dom, "phone", "2323123456"); // unlisted city → no area-code prefill, type all 10
+    type(dom, "direccion", "Rivadavia 770");
+    click(dom, "#data-next");
+    await tick();
     passDispenser(dom);
     expect(doc.querySelector("#wizard-root")!.textContent).toContain("$800"); // product step for "Monte Chico"
   });
 
-  it("completes product → data → day → confirm → success", async () => {
+  it("completes data → dispenser → product → day → confirm → success", async () => {
     const dom = await bootToProduct(stub());
     const doc = dom.window.document;
 
     pickProduct(dom);
-    fillAndSubmitData(dom);
     await tick();
 
     // Day options from the live coverage response.
@@ -360,9 +395,81 @@ describe("website: Flow B wizard", () => {
     expect(doc.querySelector("#wizard-root")!.textContent).toContain("Te lo llevamos el sábado");
   });
 
+  // ---- the merged first step: city (from the URL) + delivery data ----
+
+  it("the /alta page opens on the data step, with the URL city and a way back to the picker", async () => {
+    const dom = await bootToData(stub(), "&utm_source=ig");
+    const doc = dom.window.document;
+    // Step 1 of 5 — the city picker isn't one of them.
+    const steps = [...doc.querySelectorAll(".wizard-stepper li .label")].map((l) => l.textContent);
+    expect(steps).toEqual((dom.window as any).CIMES_COPY.wizard.steps);
+    expect(doc.querySelector(".wizard-stepper li.active .label")!.textContent).toBe("Datos");
+    // The city is a header row, not a step: shown, with Cambiar back to the picker.
+    expect(doc.querySelector(".wizard-city")!.textContent).toContain("Luján");
+    const change = doc.querySelector(".wizard-city-change") as HTMLAnchorElement;
+    expect(change.getAttribute("href")).toBe("/alta/?utm_source=ig"); // UTMs survive the trip
+    expect(doc.getElementById("data-next")).not.toBeNull();
+    expect(doc.querySelector("[data-back]")).toBeNull(); // nothing before it to go back to
+  });
+
+  it("saves the lead when the data step is submitted, before any cart exists", async () => {
+    const dom = await bootToData(stub(), "&utm_source=ig&utm_campaign=verano");
+    fillAndSubmitData(dom);
+    await tick();
+    expect(leads).toHaveLength(1);
+    expect(leads[0]).toMatchObject({
+      source: "web",
+      name: "Ana Prueba",
+      phone: "+5492323123456",
+      city: "Luján",
+      address: "Rivadavia 770",
+      cross_streets: "Mitre y Lavalle",
+      utm_source: "ig",
+      utm_campaign: "verano",
+    });
+    // Nothing about the order is known yet, so nothing about it is sent.
+    expect(leads[0]).not.toHaveProperty("items");
+    expect(leads[0]).not.toHaveProperty("dispenser");
+    expect(orders).toHaveLength(0);
+  });
+
+  it("a reload right after the data step resumes at the dispenser, not back at the form", async () => {
+    const dom = await bootToData(stub());
+    fillAndSubmitData(dom);
+    await tick();
+    for (const f of [...CORE, ...WIZARD]) evalIn(dom, read(f));
+    await tick();
+    expect(dom.window.document.getElementById("dispenser-continue")).not.toBeNull();
+  });
+
+  it("changing city keeps the name and phone but drops the city-priced cart", async () => {
+    const dom = await bootToProduct(stub()); // Luján: data submitted, dispenser passed
+    addToCart(dom, 0, 1);
+    click(dom, "#cart-continue");
+    await tick();
+
+    // Cambiar → the picker → a different city. Same tab, so sessionStorage survives.
+    const w = dom.window as unknown as { sessionStorage: Storage };
+    const saved = JSON.parse(w.sessionStorage.getItem("cimes_wizard")!);
+    expect(saved.cart).toHaveLength(1); // precondition: there was a cart to lose
+    const next = buildPage(stub(), "https://www.cimes.com.ar/alta/?city=mercedes", "alta/index.html");
+    (next.window as unknown as { sessionStorage: Storage }).sessionStorage.setItem(
+      "cimes_wizard",
+      JSON.stringify(saved),
+    );
+    for (const f of [...CORE, ...WIZARD]) evalIn(next, read(f));
+    await tick();
+
+    const doc = next.window.document;
+    // Back on the data step for the new city, with who they are still filled in.
+    expect(doc.querySelector(".wizard-city")!.textContent).toContain("Mercedes");
+    expect((doc.getElementById("firstName") as HTMLInputElement).value).toBe("Ana");
+    expect((doc.getElementById("phone") as HTMLInputElement).value).toBe("+54 9 2323 12-3456");
+    expect(doc.getElementById("cart-continue")).toBeNull(); // the cart did not survive
+  });
+
   it("data-step phone: prefilled with the city's area code + a grey digit prediction", async () => {
-    const dom = await bootToProductForCity(stub(), "mercedes");
-    pickProduct(dom);
+    const dom = await bootToData(stub(), "", "mercedes");
     const phone = dom.window.document.getElementById("phone") as HTMLInputElement;
     // Real (typed) part is just the prefilled area code; the rest is only ghost.
     expect(phone.value).toBe("+54 9 2324");
@@ -370,8 +477,7 @@ describe("website: Flow B wizard", () => {
   });
 
   it("data-step phone: a prefilled 3-digit area predicts a 7-digit local, not a 4th area digit", async () => {
-    const dom = await bootToProductForCity(stub(), "belen-de-escobar");
-    pickProduct(dom);
+    const dom = await bootToData(stub(), "", "belen-de-escobar");
     const phone = dom.window.document.getElementById("phone") as HTMLInputElement;
     expect(phone.value).toBe("+54 9 348");
     expect(phone.value + phoneGhostPending(dom, "phone")).toBe("+54 9 348 ___-____");
@@ -380,8 +486,7 @@ describe("website: Flow B wizard", () => {
   });
 
   it("data-step phone: types digits, groups with a dash at the fixed split point, rejects non-digits", async () => {
-    const dom = await bootToProduct(stub()); // Luján, area 2323
-    pickProduct(dom);
+    const dom = await bootToData(stub()); // Luján, area 2323
     const phone = () => (dom.window.document.getElementById("phone") as HTMLInputElement).value;
     typeDigits(dom, "phone", "1"); expect(phone()).toBe("+54 9 2323 1");
     typeDigits(dom, "phone", "2"); expect(phone()).toBe("+54 9 2323 12"); // 2 local digits: no dash yet
@@ -392,16 +497,14 @@ describe("website: Flow B wizard", () => {
   });
 
   it("data-step phone: paste is digit-filtered the same way as typing", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     const phone = () => (dom.window.document.getElementById("phone") as HTMLInputElement).value;
     pastePhone(dom, "phone", "12-3456 (WhatsApp)");
     expect(phone()).toBe("+54 9 2323 12-3456"); // dashes/spaces/parens/letters stripped, digits kept
   });
 
   it("data-step phone: backspace removes digits from the end, matching the spec's ghost sequence", async () => {
-    const dom = await bootToProductForCity(stub(), "mercedes");
-    pickProduct(dom);
+    const dom = await bootToData(stub(), "", "mercedes");
     const combined = () =>
       (dom.window.document.getElementById("phone") as HTMLInputElement).value + phoneGhostPending(dom, "phone");
     expect(combined()).toBe("+54 9 2324 __-____");
@@ -412,8 +515,7 @@ describe("website: Flow B wizard", () => {
   });
 
   it("data-step phone: a first digit of 1 or 0 switches to the Buenos Aires shape (11/15/011 all save as area 11)", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     const phone = () => (dom.window.document.getElementById("phone") as HTMLInputElement).value;
     backspacePhone(dom, "phone", 4); // clear Luján's prefilled area entirely
     expect(phone()).toBe("+54 9");
@@ -426,7 +528,7 @@ describe("website: Flow B wizard", () => {
     type(dom, "lastName", "P");
     type(dom, "direccion", "Rivadavia 770");
     click(dom, "#data-next");
-    await tick();
+    await continueToDay(dom);
     click(dom, '[data-option="0"]');
     click(dom, "#confirm");
     await tick();
@@ -436,8 +538,7 @@ describe("website: Flow B wizard", () => {
   it("data-step phone: a 3-digit area code splits 3+7, with or without the trunk 0", async () => {
     // Escobar (348), Pilar/Fátima (230) and Las Heras (220) are 3-digit areas — the
     // shape can't be read off the first digit, it comes from coverage.areaCodes.
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     const phone = () => (dom.window.document.getElementById("phone") as HTMLInputElement).value;
     backspacePhone(dom, "phone", 4); // clear Luján's prefilled 2323
     typeDigits(dom, "phone", "3484567890");
@@ -452,7 +553,7 @@ describe("website: Flow B wizard", () => {
     type(dom, "lastName", "P");
     type(dom, "direccion", "Rivadavia 770");
     click(dom, "#data-next");
-    await tick();
+    await continueToDay(dom);
     click(dom, '[data-option="0"]');
     click(dom, "#confirm");
     await tick();
@@ -460,8 +561,7 @@ describe("website: Flow B wizard", () => {
   });
 
   it("data-step phone: the 011 trunk spelling also saves as area 11 (one extra typed digit, 3-digit area)", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     const phone = () => (dom.window.document.getElementById("phone") as HTMLInputElement).value;
     backspacePhone(dom, "phone", 4);
     typeDigits(dom, "phone", "01112345678"); // "011" + 8-digit local = 11 typed digits
@@ -471,7 +571,7 @@ describe("website: Flow B wizard", () => {
     type(dom, "lastName", "P");
     type(dom, "direccion", "Rivadavia 770");
     click(dom, "#data-next");
-    await tick();
+    await continueToDay(dom);
     click(dom, '[data-option="0"]');
     click(dom, "#confirm");
     await tick();
@@ -479,8 +579,7 @@ describe("website: Flow B wizard", () => {
   });
 
   it("data-step phone: only '+' is truly fixed — clearing the AR prefix (549) allows a foreign number", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     const phone = () => (dom.window.document.getElementById("phone") as HTMLInputElement).value;
     backspacePhone(dom, "phone", 7); // Luján prefill is "549"+"2323" = 7 digits; clear all of it
     expect(phone()).toBe("+"); // nothing left but the fixed "+"
@@ -492,7 +591,7 @@ describe("website: Flow B wizard", () => {
     type(dom, "lastName", "P");
     type(dom, "direccion", "Rivadavia 770");
     click(dom, "#data-next");
-    await tick();
+    await continueToDay(dom);
     click(dom, '[data-option="0"]');
     click(dom, "#confirm");
     await tick();
@@ -500,8 +599,7 @@ describe("website: Flow B wizard", () => {
   });
 
   it("data-step phone: blocks Continuar until the full number is typed", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     type(dom, "firstName", "Ana");
     type(dom, "lastName", "Prueba");
     type(dom, "direccion", "Rivadavia 770");
@@ -509,15 +607,15 @@ describe("website: Flow B wizard", () => {
     await tick();
     expect(dom.window.document.getElementById("data-next")).not.toBeNull(); // still on the form
     expect(dom.window.document.querySelector('[data-field="phone"]')!.className).toContain("invalid");
+    expect(leads).toHaveLength(0); // an invalid form saves nothing
     expect(orders).toHaveLength(0);
   });
 
-  it("data-step phone: returning to the step (Back from Day) restores the previously typed number", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+  it("data-step phone: returning to the step (Back from Dispenser) restores the previously typed number", async () => {
+    const dom = await bootToData(stub());
     fillAndSubmitData(dom);
     await tick();
-    click(dom, '[data-back="data"]'); // Day step's Back re-renders the data step
+    click(dom, '[data-back="data"]'); // Dispenser step's Back re-renders the data step
     const phone = dom.window.document.getElementById("phone") as HTMLInputElement;
     expect(phone.value).toBe("+54 9 2323 12-3456"); // rebuilt from the saved E.164, not just the area code
   });
@@ -544,7 +642,6 @@ describe("website: Flow B wizard", () => {
     addToCart(dom, 0, 2); // 2x Botellón 20L @ 800 = 1600
     addToCart(dom, 2, 1); // 1x Soda en Sifón 1,5L @ 2600
     click(dom, "#cart-continue");
-    fillAndSubmitData(dom);
     await tick();
     click(dom, '[data-option="0"]');
     const summary = doc.querySelector("#wizard-root")!.textContent!;
@@ -562,41 +659,41 @@ describe("website: Flow B wizard", () => {
   });
 
   it("folds an optional Piso/Depto into the address line", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     type(dom, "firstName", "Ana");
     type(dom, "lastName", "Prueba");
     typeDigits(dom, "phone", "123456");
     type(dom, "direccion", "Rivadavia 770");
     type(dom, "piso", "3 B");
     click(dom, "#data-next");
-    await tick();
+    await continueToDay(dom);
     click(dom, '[data-option="0"]');
     click(dom, "#confirm");
     await tick();
+    // Folded the same way for both the early lead capture and the final order.
+    expect(leads[0]).toMatchObject({ address: "Rivadavia 770, 3 B" });
     expect(orders[0]).toMatchObject({ address: "Rivadavia 770, 3 B" });
   });
 
   it("client-side validation blocks empty/invalid fields", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     typeDigits(dom, "phone", "abc"); // letters rejected outright; phone stays incomplete
     click(dom, "#data-next");
     await tick();
-    // Still on the form; no coverage call happened.
+    // Still on the form; nothing was saved and no coverage call happened.
     expect(dom.window.document.getElementById("data-next")).not.toBeNull();
+    expect(leads).toHaveLength(0);
     expect(orders).toHaveLength(0);
   });
 
   it("hands off to WhatsApp manual review when a covered city has no offerable time", async () => {
-    const dom = await bootToProduct(stub({ covered: false, coordinates: null, price_list: null, delivery_options: [] }));
-    pickProduct(dom);
+    const dom = await bootToData(stub({ covered: false, coordinates: null, price_list: null, delivery_options: [] }));
     type(dom, "firstName", "Ana");
     type(dom, "lastName", "Prueba");
     typeDigits(dom, "phone", "123456");
     type(dom, "direccion", "Lejana 1");
     click(dom, "#data-next");
-    await tick();
+    await continueToDay(dom);
     const root = dom.window.document.querySelector("#wizard-root")!;
     expect(root.textContent).toContain("Estás en nuestra zona"); // manual-review copy, not a dead end
     const wa = root.querySelector('a[data-wa-loc="manual_review"]') as HTMLAnchorElement | null;
@@ -698,7 +795,6 @@ describe("website: Flow B wizard", () => {
   it("resumes the furthest step from sessionStorage after a same-tab reload", async () => {
     const dom = await bootToProduct(stub());
     pickProduct(dom);
-    fillAndSubmitData(dom);
     await tick();
     click(dom, '[data-option="0"]'); // reached the summary; option now persisted
 
@@ -719,12 +815,11 @@ describe("website: Flow B wizard", () => {
     return (url, init) =>
       url.includes("/api/prices") ? Promise.resolve(catalogWithAbono) : base(url, init);
   }
+  // The dispenser step is now reached through the data step, so these tests pass
+  // through it first; the prices fetch that renders the cards happens on the way.
   async function bootToDispenser(fetchImpl: Fetch) {
-    const dom = buildPage(
-      fetchImpl,
-      "https://www.cimes.com.ar/alta/?city=lujan",
-      "alta/index.html",
-    );
+    const dom = await bootToData(fetchImpl);
+    fillAndSubmitData(dom);
     await tick();
     return dom;
   }
@@ -796,6 +891,48 @@ describe("website: Flow B wizard", () => {
     expect(txt).not.toContain("Botellón 12L");
   });
 
+  // The natural comodato is free, so the botellones are the whole order — a
+  // dispenser with no water in the cart would leave the repartidor nothing to fill.
+  it("natural: Continuar with no botellón says so instead of advancing", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    passDispenser(dom, "natural", "comun");
+    const doc = dom.window.document;
+    const error = () => doc.querySelector("[data-cart-error]") as HTMLElement;
+    // Asked up front, not only after the mistake.
+    expect(doc.querySelector("#wizard-root")!.textContent).toContain(
+      (dom.window as any).CIMES_COPY.wizard.productStep.naturalHint,
+    );
+
+    // Soda only: the cart isn't empty, so the button is live and the click lands.
+    addToCart(dom, cardIndex(dom, "Soda en Sifón 1,5L"), 1);
+    expect(error().hidden).toBe(true);
+    click(dom, "#cart-continue");
+    expect(error().hidden).toBe(false);
+    // Against the copy module, not a literal — the wording is Mariano's to edit.
+    expect(error().textContent).toBe(
+      (dom.window as any).CIMES_COPY.wizard.productStep.errors.bottleRequired,
+    );
+    expect(doc.getElementById("cart-continue")).not.toBeNull(); // did not advance
+
+    // Adding one clears it and lets the flow continue.
+    addToCart(dom, cardIndex(dom, "Botellón 12L"), 1);
+    expect(error().hidden).toBe(true);
+    click(dom, "#cart-continue");
+    await tick();
+    expect(doc.querySelector("#wizard-root")!.textContent).toContain("Elegí tu día de entrega");
+  });
+
+  it("sin dispenser keeps the botellón requirement off", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    passDispenser(dom, "ninguno");
+    const doc = dom.window.document;
+    expect(doc.querySelector("[data-cart-error]")).toBeNull();
+    addToCart(dom, cardIndex(dom, "Soda en Sifón 1,5L"), 1);
+    click(dom, "#cart-continue");
+    await tick();
+    expect(doc.querySelector("#wizard-root")!.textContent).toContain("Elegí tu día de entrega");
+  });
+
   it("sin dispenser leaves the catalog and the total exactly as they were", async () => {
     const dom = await bootToDispenser(abonoStub());
     passDispenser(dom, "ninguno");
@@ -830,7 +967,6 @@ describe("website: Flow B wizard", () => {
     // Starts at the 4 included; one more takes it to 5.
     addToCart(dom, cardIndex(dom, "Botellón 20L Bajo Sodio"), 1);
     click(dom, "#cart-continue");
-    fillAndSubmitData(dom);
     await tick();
     click(dom, '[data-option="0"]');
 
@@ -856,7 +992,6 @@ describe("website: Flow B wizard", () => {
     passDispenser(dom, "natural", "comun");
     addToCart(dom, 0, 1);
     click(dom, "#cart-continue");
-    fillAndSubmitData(dom);
     await tick();
 
     for (const f of [...CORE, ...WIZARD]) evalIn(dom, read(f));
@@ -879,8 +1014,7 @@ describe("website: Flow B wizard", () => {
   // ---- CRO enhancements ----
 
   it("data step uses mobile-friendly input attributes (tel keyboard + autofill)", async () => {
-    const dom = await bootToProduct(stub());
-    pickProduct(dom);
+    const dom = await bootToData(stub());
     const doc = dom.window.document;
     expect(doc.getElementById("phone")!.getAttribute("type")).toBe("tel");
     expect(doc.getElementById("phone")!.getAttribute("inputmode")).toBe("tel");
@@ -900,11 +1034,6 @@ describe("website: Flow B wizard", () => {
   it("offers a WhatsApp fallback on the no-coverage screen", async () => {
     const dom = await bootToProduct(stub({ covered: false, coordinates: null, price_list: null, delivery_options: [] }));
     pickProduct(dom);
-    type(dom, "firstName", "Ana");
-    type(dom, "lastName", "Prueba");
-    typeDigits(dom, "phone", "123456");
-    type(dom, "direccion", "Lejana 1");
-    click(dom, "#data-next");
     await tick();
     const wa = dom.window.document.querySelector('#wizard-root a[href*="wa.me/"]');
     expect(wa).not.toBeNull();
@@ -935,9 +1064,8 @@ describe("website: Flow B wizard", () => {
       throw new Error(`unexpected fetch ${u}`);
     });
     await tick();
-    pickProduct(dom);
     fillAndSubmitData(dom);
-    await tick();
+    await continueToDay(dom);
 
     const root = dom.window.document.querySelector("#wizard-root")!;
     expect(root.textContent).toContain("salpicarle soda"); // retry copy, not the handoff copy
@@ -965,9 +1093,8 @@ describe("website: Flow B wizard", () => {
       throw new Error(`unexpected fetch ${u}`);
     });
     await tick();
-    pickProduct(dom);
     fillAndSubmitData(dom);
-    await tick(); // attempt 1 fails → retry panel
+    await continueToDay(dom); // attempt 1 fails → retry panel
     click(dom, "[data-retry]");
     await tick(); // attempt 2 succeeds → day picker
 
@@ -993,9 +1120,8 @@ describe("website: Flow B wizard", () => {
       throw new Error(`unexpected fetch ${u}`);
     });
     await tick();
-    pickProduct(dom);
     fillAndSubmitData(dom);
-    await tick(); // attempt 1 → retry panel
+    await continueToDay(dom); // attempt 1 → retry panel
     click(dom, "[data-retry]");
     await tick(); // attempt 2 → handoff
 

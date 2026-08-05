@@ -656,3 +656,73 @@ national digits — 4-digit (2323), 3-digit (348 Escobar, 230 Pilar, 220 Las Her
 Buenos Aires' 2-digit 11 all group and save correctly, with or without a typed trunk 0.
 Adding a city to `areaCodes` needs no change in phone.js. Verified every code in the
 list round-trips to the right E.164.
+
+## 2026-08-04 (cont.) — city merged into the data step; the lead is saved there
+
+The wizard was `city(1) → dispenser → product → data(4) → day(5, coverage) → summary(6)`,
+which had two costs: the visitor didn't see which city they were being quoted for until
+four screens in, and **nothing about them reached the backend until the coverage call** —
+every drop-out before that was lost outright.
+
+City is no longer a numbered step. It stays where it was (home page + bare `/alta/`), but
+it's a router: picking one navigates to `/alta/?city=<slug>`, which now lands directly on
+the **data form as step 1 of 5**. New order: `Datos(1) → Dispenser(2) → Productos(3) →
+Envío(4, coverage) → Resumen(5)`. The city rides above the form as a header row —
+`Ciudad: Mercedes` on the left, **Cambiar** on the right in brand red. Cambiar is a real `<a href>` to
+`/alta/` (UTMs carried), not a `data-back` re-render: `?city=` is still in the URL, so
+rendering the picker in place would be undone by the next reload.
+
+**Coverage did not move** — still fires on entering Envío, after Productos. Deliberate:
+keeping it there left `day()`, the retry escalation and the manual-review handoff
+completely untouched, and the handoff still has a cart to report.
+
+**New `POST /api/leads`** (`src/src/api/leads.ts`, modelled on `recordManualReviewLead`
+minus the sheet row and the handoff). Submitting step 1 fire-and-forgets name / phone /
+city / composed address / cross streets / attribution. It creates or updates the lead by
+phone and sets `stage: "datos_entrega"` — and **nothing else**: no sheet row, no Chatwoot
+mirror, no WaterService call, no follow-up timers (`scheduleFollowups` only ever runs off
+an inbound WhatsApp message). A half-filled web form must not page anyone. Stage is set
+explicitly because `stageFromKnownData` assumes product-before-address and would call an
+address-but-no-cart lead `producto`.
+
+Changing city keeps `state.data` and drops dispenser/cart/option — name and phone don't
+change with the city, everything after them is priced or routed per city. `startWizard`'s
+resume router was rewritten for the new order and now reads sessionStorage even on a city
+mismatch (it used to throw the whole thing away).
+
+**Worth knowing:** `/api/leads` is unauthenticated and unthrottled, like every other
+`/api/*` route (no CORS or rate-limit plugin anywhere). Not a new class of exposure —
+`/api/manual-review` already had it — but it now sits one step into the funnel instead of
+five, so it will be hit far more. A limiter was left out of scope; say the word.
+
+Also collapsed the seven-field UTM block that was copy-pasted across three route schemas
+into `attributionFields` + `pickAttribution` in `server.ts`.
+
+Google Maps needed no work: `loadGoogleMaps()` already calls `attachPlaces()` from its own
+`onload` and `attachPlaces` is idempotent per input, so the field binds a moment after
+first paint and is a plain typeable input until then. `04-website §8`'s "load Maps at the
+product step" rule was rewritten to say what actually prevents the regression (bind from
+the loader callback), since there's no earlier step to preload from now.
+
+**155 tests, typecheck clean** (+`test/leads.test.ts`; `website.test.ts` helpers reworked —
+`bootToData`/`continueToDay`, and its fetch stub now records at call time rather than on
+`json()`, since a fire-and-forget POST never reads its body). Docs updated: `00-master §5.6`,
+`01-core-api §9`, `04-website §3/§4/§8`.
+
+**Not verified live.** Everything above is jsdom + `:memory:` SQLite. Still to do:
+`./dev.sh` click-through, then a `--real` run confirming an abandoned step 1 leaves one
+`leads` row at `datos_entrega` with no `orders`/`jobs` row, and that finishing later
+reuses the same `lead_id` instead of making a second lead.
+
+**Catalog-gap alert now tested (2026-08-05).** `checkCatalogCompleteness` had no coverage since the
+`prices_sheet_check` → `prices_refresh` move narrowed it to GENERAL only. Three cases added to
+`test/frio-calor-pricing.test.ts` (same env-reimport harness, real `WaterServicePriceProvider` over an
+in-memory cache, no WaterService mock): GENERAL complete → silent even with 1-SKU zone lists; GENERAL
+short two SKUs → one gap naming them, zone lists absent from it; a zone list holding only non-catalog
+rows → `no se pudo resolver` (it throws through `applyCatalog`, and the GENERAL-only guard sits after
+the resolve, so unresolvable zone lists still alert). Expected names come from `SKUS` rather than
+literals, so a display-name edit can't leave the assertions stale.
+
+typecheck clean, **163 tests**. Supersedes the two open items in the 9-SKU entry above: the product
+photos landed (`botellon-20l-ms.webp`, `isotonica.webp`), so `website.test.ts > every catalog SKU has
+a product photo` is green.

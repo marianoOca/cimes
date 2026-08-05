@@ -32,11 +32,38 @@ free_port() {
   if [ -n "$pid" ]; then echo "freeing :$1 (pid $pid)"; kill $pid 2>/dev/null || true; sleep 1; fi
 }
 
+# Job control, so every `&` job becomes its own process-group leader. Two reasons,
+# both needed for a single ctrl-C to be enough:
+#   - Without it the jobs share the script's process group, so the tty delivers ctrl-C
+#     to `tsx watch` directly; our kill then arrives as a *second* signal and tsx
+#     answers "Previous process hasn't exited yet. Force killing...".
+#   - `$!` is the PID of the `( ... ) &` subshell, not of npm/tsx underneath it, so
+#     killing it alone orphans the backend. Killing the whole group reaches everything.
+set -m
+
 pids=()
+stopping=0
 cleanup() {
+  # INT fires this, then the EXIT trap fires it again — guard, or "stopping..." twice.
+  if [ "$stopping" = 1 ]; then return; fi
+  stopping=1
+  # Leave monitor mode before killing, or bash reports each job ("[1]- Terminated: 15
+  # ( cd src && ... )") on its way out. The groups are already established.
+  set +m
   echo
   echo "stopping..."
-  for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done
+  # Negative PID = the job's whole process group (subshell + npm + tsx + its child).
+  for p in "${pids[@]:-}"; do kill -TERM -"$p" 2>/dev/null || true; done
+  # Give them a moment to go down cleanly, then insist.
+  for _ in $(seq 20); do
+    local alive=0
+    for p in "${pids[@]:-}"; do
+      if kill -0 "$p" 2>/dev/null; then alive=1; fi
+    done
+    if [ "$alive" = 0 ]; then return; fi
+    sleep 0.1
+  done
+  for p in "${pids[@]:-}"; do kill -KILL -"$p" 2>/dev/null || true; done
 }
 trap cleanup EXIT INT TERM
 

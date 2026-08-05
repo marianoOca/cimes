@@ -392,11 +392,18 @@ main > section h2::after {
 .phone-mask-box:focus-within .phone-mask-ghost { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(var(--blue-rgb), 0.16); }
 .field.invalid .phone-mask-ghost { border-color: var(--error); background: var(--red-050); }
 
-/* Read-only city line at the top of the data step (city comes from the URL). */
+/* City header row at the top of the data step: the city comes from the URL, so it's
+   shown here with a way back to the picker rather than as a step of its own. */
 .wizard-city {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
   font-size: 0.92rem; color: var(--muted); margin-bottom: 1.1rem;
   padding-bottom: 0.85rem; border-bottom: 1px dashed var(--border);
 }
+/* Deliberately link-weight, not a button: it must not compete with "Continuar". */
+.wizard-city-change {
+  color: var(--red); font-weight: 600; text-decoration: underline;
+}
+.wizard-city-change:hover { color: var(--red-dark); }
 
 .wizard-actions { display: flex; gap: 0.6rem; justify-content: space-between; margin-top: 1.3rem; }
 .wizard-actions .btn { flex: 1; }

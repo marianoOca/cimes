@@ -126,10 +126,11 @@ window.CIMES_COPY = {
   },
   wizard: {
     title: "Alta automática",
-    subtitle: "2 minutos, 6 simples pasos.",
-    // Numbered stepper labels (progress bar), one per wizard step.
-    steps: ["Ciudad", "Dispenser", "Productos", "Datos", "Envío", "Resumen"],
-    stepOf: (n) => `Paso ${n} de 6`,
+    subtitle: "2 minutos, 5 simples pasos.",
+    // Numbered stepper labels (progress bar), one per wizard step. The city is
+    // picked before the wizard starts (home page / bare /alta), so it isn't one.
+    steps: ["Datos", "Dispenser", "Productos", "Envío", "Resumen"],
+    stepOf: (n) => `Paso ${n} de 5`,
     waFallback: "Probá escribinos por WhatsApp",
     successHint: "Guardá esta confirmación. Ante cualquier duda, escribinos por WhatsApp.",
     // Shortcut cities are the quick picks; "other" is the free-text entry that
@@ -159,7 +160,7 @@ window.CIMES_COPY = {
       intro: "Te prestamos el dispenser en comodato, lo disfrutas sin costo.",
       waterLabel: "¿Qué agua tomás?",
       water: { comun: "Común", bajo_sodio: "Bajo en sodio" },
-      continue: "Siguiente",
+      continue: "Continuar",
       frioCalor: {
         title: "Dispenser Frío/Calor",
         badge: "50% OFF el primer mes",
@@ -206,18 +207,29 @@ window.CIMES_COPY = {
       // On the card of the botellón the abono covers: says the listed price only
       // starts applying once those are used up.
       included: (n) => `primeros ${n} incluidos`,
+      // Natural comodato only: the dispenser is free, so the botellones ARE the
+      // order. Said up front here, enforced on Continuar (steps.js product()).
+      naturalHint: "Dispenser Natural: por favor elija al menos un botellón.",
+      errors: {
+        bottleRequired: "Por favor, elija al menos un botellón de 20 o 12 L para continuar.",
+      },
     },
+    // Step 1. The city is already chosen (it's in the URL), so it's shown here as
+    // a header row with a way back to the picker rather than as its own step.
     dataStep: {
       title: "Tus datos de entrega",
       cityLabel: "Ciudad",
+      change: "Cambiar",
       firstName: "Nombre",
       lastName: "Apellido",
       phone: "Teléfono (WhatsApp)",
       direccion: "Dirección",
-      direccionPlaceholder: "Ej: Av. Rivadavia 770",
+      // Example carries a city to signal that a full address is accepted here — the
+      // field is freeform and the backend geocodes the raw string (see places.js).
+      direccionPlaceholder: "Ej: Av. Rivadavia 770, Luján",
       piso: "Piso / Depto / Referencia (opcional)",
       crossStreets: "Entre calles (opcional)",
-      next: "Verificar cobertura",
+      next: "Continuar",
       errors: {
         required: "Completá este campo.",
         phone: "Ingresá un teléfono válido (ej: +54 9 2324 12-3456).",

@@ -94,6 +94,11 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   if (req.method === "POST" && path === "/api/resolve-city") {
     return json(res, 200, matchCity(String(data.text ?? "")));
   }
+  // STUB: the data step's early lead capture. Logged, never persisted.
+  if (req.method === "POST" && path === "/api/leads") {
+    console.log("[stub] lead", data.name, data.phone, data.city, data.address);
+    return json(res, 200, { ok: true });
+  }
   if (req.method === "POST" && path === "/api/orders") {
     // STUB: acknowledge without any real WaterService/Sheet write. Mirror the
     // real server: resolve items against the catalog, sum the total, summarize.

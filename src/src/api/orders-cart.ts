@@ -10,6 +10,7 @@
 // (at the list's normal 20L price — that IS the excedente). The abono itself
 // rides along as a synthetic line, discounted 50% for the first month.
 import { skuByDisplay } from "../catalog/skus.js";
+import type { Dispenser } from "../db/leads.js";
 import type { Abono, WaterType } from "../providers/abonos.js";
 import type { PricedCatalog } from "../providers/types.js";
 
@@ -24,7 +25,7 @@ export interface CartLine {
   qty: number;
 }
 
-export type Dispenser = "natural" | "frio_calor" | "ninguno";
+export type { Dispenser };
 
 export interface CartOptions {
   dispenser?: Dispenser;

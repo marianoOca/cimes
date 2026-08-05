@@ -68,8 +68,22 @@ export async function handleDispatchOrder(
   const ticketId = await ws.crearTicket({
     centroDistribucionId: centroId,
     clienteId: Number(lead.waterservice_client_id),
-    titulo: `Visita por alta — ${lead.name || lead.phone}`,
-    descripcionHtml: `<p>Producto: ${order.product}</p><p>Horario: ${order.delivery_window}</p><p>Monto a cobrar: $${order.amount_to_collect}</p>`,
+    titulo: `Cliente nuevo: ${lead.name || lead.phone}`,
+    descripcionHtml: [
+      // Leads with the comodato so the repartidor brings the dispenser; omitted
+      // for `ninguno` (bottles only, which includes every WhatsApp order).
+      lead.dispenser === "frio_calor"
+        ? "Cliente nuevo frío calor"
+        : lead.dispenser === "natural"
+          ? "Cliente nuevo natural"
+          : null,
+      `Cobrar: $${order.amount_to_collect}`,
+      `Producto: ${order.product}`,
+      `Horario: ${order.delivery_window}`,
+    ]
+      .filter((line): line is string => line !== null)
+      .map((line) => `<p>${line}</p>`)
+      .join(""),
     fechaCierreEstimado: toWsDate(deliveryDate),
     tipoIncidenteId: config.WS_INCIDENT_TYPE_ID,
     subTipoIncidenteId: config.WS_INCIDENT_SUBTYPE_ID,
