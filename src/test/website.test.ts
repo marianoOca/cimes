@@ -6,11 +6,12 @@
 //   - alta/index.html?city=<slug> → boots straight to the product step
 // jsdom has no window.google, so the Direccion field is a plain text input here
 // (Google Places attaches only when the Maps SDK is present in the browser).
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SKUS } from "../src/catalog/skus.js";
 
 const websiteDir = join(dirname(fileURLToPath(import.meta.url)), "../../website");
 const read = (f: string) => readFileSync(join(websiteDir, f), "utf8");
@@ -33,10 +34,41 @@ const catalog = {
   city: "Luján",
   price_list: "5",
   products: [
-    { id: "1", name: "Bidon x 20 lts", price: 800 },
-    { id: "2", name: "Bidon x 12 lts", price: 500 },
-    { id: "3", name: "Soda x 1.5 lts", price: 2600 }, // 4-digit: exercises comma formatting
+    { id: "1", name: "Botellón 20L", price: 800 },
+    { id: "2", name: "Botellón 12L", price: 500 },
+    { id: "3", name: "Soda en Sifón 1,5L", price: 2600 }, // 4-digit: exercises comma formatting
   ],
+};
+
+// A catalog whose city can price the comodato, so the frío/calor card renders.
+// Shape mirrors api/frio-calor.ts.
+const catalogWithAbono = {
+  ...catalog,
+  products: [
+    ...catalog.products,
+    { id: "4", name: "Botellón 20L Bajo Sodio", price: 900 },
+    { id: "5", name: "Botellón 12L Bajo Sodio", price: 600 },
+  ],
+  frio_calor: {
+    comun: {
+      abono_id: 1,
+      abono_name: "abono mensual de 4 botellones de 20 lts",
+      abono: 34000,
+      abono_first_month: 17000,
+      included_bottles: 4,
+      excedente: 800,
+      price_list: "5",
+    },
+    bajo_sodio: {
+      abono_id: 7,
+      abono_name: "abono mensual de 4 botellones de 20 lts -NA",
+      abono: 36000,
+      abono_first_month: 18000,
+      included_bottles: 4,
+      excedente: 900,
+      price_list: "5",
+    },
+  },
 };
 
 const coverageOk = {
@@ -119,7 +151,24 @@ function phoneGhostPending(dom: JSDOM, fieldId: string) {
 function addToCart(dom: JSDOM, i: number, qty = 1) {
   for (let n = 0; n < qty; n++) click(dom, `[data-inc="${i}"]`);
 }
+// Step 2 is the dispenser picker. "Sin dispenser" leaves the catalog unfiltered
+// and adds no abono, so tests that don't care about the comodato pass straight
+// through it and see exactly what they saw before the step existed.
+function passDispenser(dom: JSDOM, kind = "ninguno", water?: string) {
+  click(dom, `[data-dispenser="${kind}"]`);
+  if (water) click(dom, `[data-water="${water}"][data-card="${kind}"]`);
+  click(dom, "#dispenser-continue");
+}
+// The dispenser choice filters the catalog, so a card's index is not its index in
+// the API response. Look it up by display name.
+function cardIndex(dom: JSDOM, name: string) {
+  const names = Array.from(dom.window.document.querySelectorAll(".cart-card .cart-name"));
+  const i = names.findIndex((el) => el.textContent === name);
+  if (i < 0) throw new Error(`no product card for ${name}`);
+  return i;
+}
 function pickProduct(dom: JSDOM, i = 0, qty = 1) {
+  if (dom.window.document.querySelector("#dispenser-continue")) passDispenser(dom);
   addToCart(dom, i, qty);
   click(dom, "#cart-continue");
 }
@@ -158,11 +207,13 @@ describe("website: Flow B wizard", () => {
     };
   }
 
-  // Boot the dedicated /alta page for a valid city → lands on the product step
-  // once the prices fetch resolves.
+  // Boot the dedicated /alta page for a valid city → the dispenser step once the
+  // prices fetch resolves, then straight through it with "Sin dispenser" so the
+  // product step looks exactly as it did before step 2 existed.
   async function bootToProduct(fetchImpl: Fetch, query = "", citySlug = "lujan") {
     const dom = buildPage(fetchImpl, `https://www.cimes.com.ar/alta/?city=${citySlug}${query}`, "alta/index.html");
     await tick();
+    passDispenser(dom);
     return dom;
   }
   // Same as bootToProduct, but for the ghost-mask tests that need to match the
@@ -212,7 +263,8 @@ describe("website: Flow B wizard", () => {
     const dom = buildPage(stub());
     const doc = dom.window.document;
     const links = [...doc.querySelectorAll("#wizard-root a.city-option")] as HTMLAnchorElement[];
-    expect(links).toHaveLength(8); // the shortcut cities
+    // One per quick-pick city — against the copy module, since the list is Mariano's to edit.
+    expect(links).toHaveLength((dom.window as any).CIMES_COPY.coverage.cities.length);
     const hrefs = links.map((a) => a.getAttribute("href"));
     expect(hrefs).toContain("/alta/?city=lujan");
     expect(hrefs).toContain("/alta/?city=san-andres-de-giles");
@@ -244,11 +296,26 @@ describe("website: Flow B wizard", () => {
     expect(doc.getElementById("product-grid")).toBeNull();
   });
 
+  // The API only ever returns the 9 canonical display names, so every one of them
+  // must resolve to a real photo — a logo fallback means the map in js/wizard.js
+  // drifted from the SKU registry (or an asset is missing).
+  it("every catalog SKU has a product photo", async () => {
+    const dom = await bootToProduct(stub());
+    const productImage = (dom.window as unknown as {
+      CIMES_APP: { productImage(name: string): string };
+    }).CIMES_APP.productImage;
+    for (const sku of SKUS) {
+      const src = productImage(sku.display);
+      expect(src, sku.display).toMatch(/^\/assets\/products\/.+\.webp$/);
+      expect(existsSync(join(websiteDir, src)), src).toBe(true);
+    }
+  });
+
   it("the /alta page shows the city picker when ?city is missing", async () => {
     const dom = buildPage(stub(), "https://www.cimes.com.ar/alta/", "alta/index.html");
     await tick();
     const links = dom.window.document.querySelectorAll("#wizard-root a.city-option");
-    expect(links).toHaveLength(8);
+    expect(links).toHaveLength((dom.window as any).CIMES_COPY.coverage.cities.length);
   });
 
   it("the /alta page carries an unrecognized ?city into the wizard (proceed-anyway), not the picker", async () => {
@@ -258,6 +325,7 @@ describe("website: Flow B wizard", () => {
     await tick();
     const doc = dom.window.document;
     expect(doc.querySelectorAll("#wizard-root a.city-option")).toHaveLength(0); // not the picker
+    passDispenser(dom);
     expect(doc.querySelector("#wizard-root")!.textContent).toContain("$800"); // product step for "Monte Chico"
   });
 
@@ -286,7 +354,7 @@ describe("website: Flow B wizard", () => {
       city: "Luján",
       address: "Rivadavia 770",
       cross_streets: "Mitre y Lavalle",
-      items: [{ product: "Bidon x 20 lts", qty: 1 }],
+      items: [{ product: "Botellón 20L", qty: 1 }],
       delivery_day: "sábado",
     });
     expect(doc.querySelector("#wizard-root")!.textContent).toContain("Te lo llevamos el sábado");
@@ -299,6 +367,16 @@ describe("website: Flow B wizard", () => {
     // Real (typed) part is just the prefilled area code; the rest is only ghost.
     expect(phone.value).toBe("+54 9 2324");
     expect(phone.value + phoneGhostPending(dom, "phone")).toBe("+54 9 2324 __-____");
+  });
+
+  it("data-step phone: a prefilled 3-digit area predicts a 7-digit local, not a 4th area digit", async () => {
+    const dom = await bootToProductForCity(stub(), "belen-de-escobar");
+    pickProduct(dom);
+    const phone = dom.window.document.getElementById("phone") as HTMLInputElement;
+    expect(phone.value).toBe("+54 9 348");
+    expect(phone.value + phoneGhostPending(dom, "phone")).toBe("+54 9 348 ___-____");
+    typeDigits(dom, "phone", "1");
+    expect(phone.value + phoneGhostPending(dom, "phone")).toBe("+54 9 348 1__-____");
   });
 
   it("data-step phone: types digits, groups with a dash at the fixed split point, rejects non-digits", async () => {
@@ -353,6 +431,32 @@ describe("website: Flow B wizard", () => {
     click(dom, "#confirm");
     await tick();
     expect(orders[0]).toMatchObject({ phone: "+5491112345678" }); // "15" normalized to area 11
+  });
+
+  it("data-step phone: a 3-digit area code splits 3+7, with or without the trunk 0", async () => {
+    // Escobar (348), Pilar/Fátima (230) and Las Heras (220) are 3-digit areas — the
+    // shape can't be read off the first digit, it comes from coverage.areaCodes.
+    const dom = await bootToProduct(stub());
+    pickProduct(dom);
+    const phone = () => (dom.window.document.getElementById("phone") as HTMLInputElement).value;
+    backspacePhone(dom, "phone", 4); // clear Luján's prefilled 2323
+    typeDigits(dom, "phone", "3484567890");
+    expect(phone()).toBe("+54 9 348 456-7890");
+    expect(phoneGhostPending(dom, "phone")).toBe(""); // complete at 10 digits
+
+    backspacePhone(dom, "phone", 10);
+    typeDigits(dom, "phone", "02304567890"); // trunk 0 typed out of habit
+    expect(phone()).toBe("+54 9 0230 456-7890");
+
+    type(dom, "firstName", "Ana");
+    type(dom, "lastName", "P");
+    type(dom, "direccion", "Rivadavia 770");
+    click(dom, "#data-next");
+    await tick();
+    click(dom, '[data-option="0"]');
+    click(dom, "#confirm");
+    await tick();
+    expect(orders[0]).toMatchObject({ phone: "+5492304567890" }); // trunk 0 dropped
   });
 
   it("data-step phone: the 011 trunk spelling also saves as area 11 (one extra typed digit, 3-digit area)", async () => {
@@ -420,7 +524,7 @@ describe("website: Flow B wizard", () => {
 
   it("formats prices with a thousands comma in the product step", async () => {
     const dom = await bootToProduct(stub());
-    // Soda x 1.5 lts @ 2600 renders as $2,600 (comma thousands).
+    // Soda en Sifón 1,5L @ 2600 renders as $2,600 (comma thousands).
     expect(dom.window.document.querySelector("#wizard-root")!.textContent).toContain("$2,600");
   });
 
@@ -437,22 +541,22 @@ describe("website: Flow B wizard", () => {
   it("carries multiple cart line items + total through to the order", async () => {
     const dom = await bootToProduct(stub());
     const doc = dom.window.document;
-    addToCart(dom, 0, 2); // 2x Bidon x 20 lts @ 800 = 1600
-    addToCart(dom, 2, 1); // 1x Soda x 1.5 lts @ 2600
+    addToCart(dom, 0, 2); // 2x Botellón 20L @ 800 = 1600
+    addToCart(dom, 2, 1); // 1x Soda en Sifón 1,5L @ 2600
     click(dom, "#cart-continue");
     fillAndSubmitData(dom);
     await tick();
     click(dom, '[data-option="0"]');
     const summary = doc.querySelector("#wizard-root")!.textContent!;
-    expect(summary).toContain("2x Bidon x 20 lts");
-    expect(summary).toContain("1x Soda x 1.5 lts");
+    expect(summary).toContain("2x Botellón 20L");
+    expect(summary).toContain("1x Soda en Sifón 1,5L");
     expect(summary).toContain("$4,200"); // 1600 + 2600
     click(dom, "#confirm");
     await tick();
     expect(orders[0]).toMatchObject({
       items: [
-        { product: "Bidon x 20 lts", qty: 2 },
-        { product: "Soda x 1.5 lts", qty: 1 },
+        { product: "Botellón 20L", qty: 2 },
+        { product: "Soda en Sifón 1,5L", qty: 1 },
       ],
     });
   });
@@ -606,6 +710,161 @@ describe("website: Flow B wizard", () => {
     const txt = dom.window.document.querySelector("#wizard-root")!.textContent!;
     expect(txt).toContain("Rivadavia 770, Luján"); // jumped straight back to the summary
     expect(txt).toContain("Confirmar pedido");
+  });
+
+  // ---- dispenser step (04 §3 step 2) ----
+
+  function abonoStub(): Fetch {
+    const base = stub();
+    return (url, init) =>
+      url.includes("/api/prices") ? Promise.resolve(catalogWithAbono) : base(url, init);
+  }
+  async function bootToDispenser(fetchImpl: Fetch) {
+    const dom = buildPage(
+      fetchImpl,
+      "https://www.cimes.com.ar/alta/?city=lujan",
+      "alta/index.html",
+    );
+    await tick();
+    return dom;
+  }
+
+  it("prices the frío/calor card from the API, and the water toggle re-prices it", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    const price = () => dom.window.document.querySelector("[data-abono-price]")!.textContent!;
+    expect(price()).toContain("$34,000");
+    expect(price()).toContain("$17,000"); // 50% off the first month
+    click(dom, '[data-water="bajo_sodio"][data-card="frio_calor"]');
+    expect(price()).toContain("$36,000");
+    expect(price()).toContain("$18,000");
+  });
+
+  it("renders **bold** from the copy module, and only that", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    const doc = dom.window.document;
+    expect(doc.querySelector("[data-abono-price] strong")!.textContent).toBe("$17,000");
+    expect(doc.querySelector('[data-dispenser="ninguno"] strong')!.textContent).toBe(
+      "otros productos",
+    );
+    // The markers are the only markup a copy edit can introduce.
+    expect((dom.window as any).CIMES_APP.rich("<b>x</b> **y**")).toBe(
+      "&lt;b&gt;x&lt;/b&gt; <strong>y</strong>",
+    );
+  });
+
+  it("hides frío/calor when the backend can't price the abono", async () => {
+    const dom = await bootToDispenser(stub()); // catalog without a frio_calor block
+    const doc = dom.window.document;
+    expect(doc.querySelector('[data-dispenser="frio_calor"]')).toBeNull();
+    expect(doc.querySelector('[data-dispenser="natural"]')).not.toBeNull();
+  });
+
+  it("Siguiente with nothing chosen prompts instead of silently doing nothing", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    const doc = dom.window.document;
+    const error = () => doc.querySelector("[data-dispenser-error]") as HTMLElement;
+    expect(error().hidden).toBe(true);
+    click(dom, "#dispenser-continue");
+    expect(error().hidden).toBe(false);
+    // Against the copy module, not a literal — the wording is Mariano's to edit.
+    expect(error().textContent).toBe(
+      (dom.window as any).CIMES_COPY.wizard.dispenserStep.errors.required,
+    );
+    expect(doc.getElementById("dispenser-continue")).not.toBeNull(); // did not advance
+    // Choosing clears it and lets the flow continue.
+    click(dom, '[data-dispenser="natural"]');
+    expect(error().hidden).toBe(true);
+    click(dom, "#dispenser-continue");
+    expect(doc.getElementById("cart-continue")).not.toBeNull();
+  });
+
+  it("the water choice filters the botellones the next step offers", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    passDispenser(dom, "natural", "bajo_sodio");
+    let txt = dom.window.document.querySelector(".wizard-cart")!.textContent!;
+    expect(txt).toContain("Botellón 20L Bajo Sodio");
+    expect(txt).toContain("Botellón 12L Bajo Sodio");
+    expect(txt).not.toContain("Botellón 20L<"); // the común ones are gone
+    expect(txt).toContain("Soda en Sifón"); // non-bottles always stay
+
+    // Frío/calor is an abono of 4x20L, so only that bottle is offered.
+    const fc = await bootToDispenser(abonoStub());
+    passDispenser(fc, "frio_calor", "comun");
+    await tick(); // frío/calor re-quotes off its own price list
+    txt = fc.window.document.querySelector(".wizard-cart")!.textContent!;
+    expect(txt).toContain("Botellón 20L");
+    expect(txt).not.toContain("Botellón 12L");
+  });
+
+  it("sin dispenser leaves the catalog and the total exactly as they were", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    passDispenser(dom, "ninguno");
+    addToCart(dom, 0, 2);
+    const root = dom.window.document.querySelector("#wizard-root")!;
+    expect(root.querySelector(".cart-total")!.textContent).toBe("$1,600"); // 2 x $800, no abono
+    expect(root.textContent).not.toContain("Incluido");
+  });
+
+  it("frío/calor: the 4 included botellones are prefilled, the 5th is charged", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    passDispenser(dom, "frio_calor", "comun");
+    await tick();
+    const root = dom.window.document.querySelector("#wizard-root")!;
+    const i = cardIndex(dom, "Botellón 20L");
+    expect(root.textContent).toContain("primeros 4 incluidos");
+    // They're already paying for those four, so the stepper starts there.
+    expect(root.querySelector(`[data-qty="${i}"]`)!.textContent).toBe("4");
+    // This step totals PRODUCTS only; the abono joins them at the summary.
+    expect(root.textContent).toContain("Subtotal productos");
+    const subtotal = () => root.querySelector(".cart-total")!.textContent;
+    expect(subtotal()).toBe("$0"); // the four included cost nothing
+    addToCart(dom, i, 1);
+    expect(subtotal()).toBe("$800"); // the 5th at the list price
+  });
+
+  it("frío/calor: the order carries the choice and the abono line", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    passDispenser(dom, "frio_calor", "bajo_sodio");
+    await tick();
+    // Filtering renumbers the cards, so find the bottle by name rather than index.
+    // Starts at the 4 included; one more takes it to 5.
+    addToCart(dom, cardIndex(dom, "Botellón 20L Bajo Sodio"), 1);
+    click(dom, "#cart-continue");
+    fillAndSubmitData(dom);
+    await tick();
+    click(dom, '[data-option="0"]');
+
+    // Products and the abono are shown apart, so the monthly fee never looks
+    // like a per-bottle charge.
+    const summary = dom.window.document.querySelector("#wizard-root")!.textContent!;
+    expect(summary).toContain("50% OFF el primer mes");
+    expect(summary).toContain("Subtotal productos$900"); // the 5th only
+    expect(summary).toContain("Total a pagar en la entrega");
+    expect(summary).toContain("$18,900"); // 18,000 abono + 1 excedente @ 900
+
+    click(dom, "#confirm");
+    await tick();
+    const order = orders[0] as Record<string, unknown>;
+    expect(order.dispenser).toBe("frio_calor");
+    expect(order.water_type).toBe("bajo_sodio");
+    // The server prices it; the site only reports what was chosen.
+    expect(order.items).toEqual([{ product: "Botellón 20L Bajo Sodio", qty: 5 }]);
+  });
+
+  it("a reload before choosing a dispenser resumes at the dispenser step", async () => {
+    const dom = await bootToDispenser(abonoStub());
+    passDispenser(dom, "natural", "comun");
+    addToCart(dom, 0, 1);
+    click(dom, "#cart-continue");
+    fillAndSubmitData(dom);
+    await tick();
+
+    for (const f of [...CORE, ...WIZARD]) evalIn(dom, read(f));
+    await tick();
+    // The saved cart was filtered by the saved choice, so both come back together.
+    const doc = dom.window.document;
+    expect(doc.getElementById("dispenser-continue")).toBeNull();
+    expect(doc.querySelector("#wizard-root")!.textContent).toContain("Elegí tu día de entrega");
   });
 
   it("clears persisted state after a confirmed order", async () => {

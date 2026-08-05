@@ -69,8 +69,12 @@ export const copy = {
     `⚠️ Derivación: el lead ${phone} necesita atención humana (${reason}). Conversación: ${link}`,
   operatorFailureAlert: (phone: string, detail: string): string =>
     `❌ Falló la sincronización del pedido de ${phone}: ${detail}. Quedó en cola de reintento.`,
-  operatorSheetMismatchAlert: (detail: string): string =>
-    `⚠️ Diferencia de precios entre la planilla y WaterService: ${detail}`,
+  operatorPriceRefreshFailedAlert: (detail: string): string =>
+    `⚠️ No se pudieron actualizar los precios desde WaterService: ${detail}. Seguimos cotizando con los últimos precios guardados.`,
+  operatorPricesStaleAlert: (since: string): string =>
+    `⚠️ Los precios guardados no se actualizan desde ${since}. Revisá la conexión con WaterService.`,
+  operatorMissingSkusAlert: (detail: string): string =>
+    `⚠️ Faltan productos del catálogo en la lista de precios: ${detail}. Los clientes de esas zonas no los ven.`,
   operatorNewZoneAlert: (phone: string, address: string): string =>
     `📍 Lead sin cobertura para revisar: ${phone} — ${address}`,
   operatorManualReviewAlert: (

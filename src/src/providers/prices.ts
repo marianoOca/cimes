@@ -1,173 +1,161 @@
-// PriceProvider (01 §2). PRICES_SOURCE is fully open (00-master §10a) — no
-// forced default; both implementations drop in behind the same interface.
+// PriceProvider (01 §2). WaterService is the only source of truth for prices.
 // The AI reaches prices ONLY through this provider.
-import { GoogleSpreadsheet } from "google-spreadsheet";
-import { JWT } from "google-auth-library";
+//
+// The request path never calls WaterService: it reads the local mirror in
+// `ws_price_cache` (db/prices-cache.ts), refreshed daily by the `prices_refresh`
+// cron. A WaterService outage must not dead-end the wizard — a quote we can't
+// produce is a lead we never save. The only live call left on the read path is a
+// cache MISS (cold DB after a deploy, or a list id the cron hasn't seen yet),
+// which fetches once and writes through.
 import { config } from "../config.js";
+import { applyCatalog, missingSkus } from "../catalog/skus.js";
+import { getDb, type DB } from "../db/db.js";
+import { readList, writeList, writeAbono } from "../db/prices-cache.js";
 import * as ws from "../waterservice/client.js";
 import type { PriceMatrix } from "../waterservice/client.js";
-import type { PricedCatalog, PriceProvider } from "./types.js";
+import type { PricedCatalog, PricedProduct, PriceProvider } from "./types.js";
 
 // City → price list. Per-city exceptions win (e.g. Lobos → PRECIO LOBOS);
 // every other city falls back to PRICE_LIST_DEFAULT_ID (LISTA PRECIOS GENERAL).
 // Never throws on an unmapped city — that's the whole point of the "any BA city
 // is served" model; only a total misconfiguration (no default at all) throws.
-export function resolveCityListId(city: string): string {
+//
+// `frioCalor` layers PRECIO CAMPANA ESPECIAL on top, which exists ONLY for the
+// comodato: a Campana customer buying loose bottles still gets the normal rule.
+export function resolveCityListId(
+  city: string,
+  opts: { frioCalor?: boolean } = {},
+): string {
+  const key = city.toLowerCase();
   const listId =
-    config.CITY_PRICE_LIST_MAP[city.toLowerCase()] || config.PRICE_LIST_DEFAULT_ID;
+    (opts.frioCalor ? config.FRIO_CALOR_CITY_PRICE_LIST_MAP[key] : "") ||
+    config.CITY_PRICE_LIST_MAP[key] ||
+    config.PRICE_LIST_DEFAULT_ID;
   if (!listId) throw new Error("No price list configured: set PRICE_LIST_DEFAULT_ID");
   return listId;
 }
 
-// ---------- waterservice implementation (#10 matrix, daily refresh) ----------
+/** Every price list this deployment can serve. Feeds the refresh + the daily gap check. */
+export function configuredListIds(): string[] {
+  return [
+    ...new Set(
+      [
+        ...Object.values(config.CITY_PRICE_LIST_MAP),
+        ...Object.values(config.FRIO_CALOR_CITY_PRICE_LIST_MAP),
+        config.PRICE_LIST_DEFAULT_ID,
+      ].filter(Boolean),
+    ),
+  ];
+}
 
-const MATRIX_TTL_MS = 24 * 3_600_000;
+/** One list's rows out of the #10 matrix, unfiltered (catalog/skus applies on read). */
+function listFromMatrix(matrix: PriceMatrix, listaDePreciosId: string): PricedProduct[] {
+  const listId = Number(listaDePreciosId);
+  return matrix.articulos
+    .map((a) => {
+      const entry = a.precios.find((p) => p.lista_id === listId);
+      return entry
+        ? {
+            id: String(a.articulo_id),
+            name: a.nombreArticulo,
+            price: entry.precio,
+            notes: a.rubro ?? undefined,
+          }
+        : null;
+    })
+    .filter((p): p is NonNullable<typeof p> => p !== null);
+}
 
 export class WaterServicePriceProvider implements PriceProvider {
-  private matrix: PriceMatrix | null = null;
-  private loadedAt = 0;
+  constructor(private readonly db: DB = getDb()) {}
 
-  private async getMatrix(): Promise<PriceMatrix> {
-    if (!this.matrix || Date.now() - this.loadedAt > MATRIX_TTL_MS) {
-      this.matrix = await ws.obtenerMatrizListaDePrecios(config.WS_TIPO_LISTA_ID);
-      this.loadedAt = Date.now();
-    }
-    return this.matrix;
-  }
-
-  // The #10 matrix carries every list's prices, so the neighbor-derived
-  // listaDePrecios_id resolves locally without a per-client #5 call.
   async getPricesForList(listaDePreciosId: string): Promise<PricedCatalog> {
-    const matrix = await this.getMatrix();
-    const listId = Number(listaDePreciosId);
-    const products = matrix.articulos
-      .map((a) => {
-        const entry = a.precios.find((p) => p.lista_id === listId);
-        return entry
-          ? {
-              id: String(a.articulo_id),
-              name: a.nombreArticulo,
-              price: entry.precio,
-              notes: a.rubro ?? undefined,
-            }
-          : null;
-      })
-      .filter((p): p is NonNullable<typeof p> => p !== null);
-    if (products.length === 0) {
+    const cached = readList(this.db, listaDePreciosId);
+    const raw = cached ? cached.products : await this.fetchAndCache(listaDePreciosId);
+    if (raw.length === 0) {
       throw new Error(`Price list ${listaDePreciosId} not found in matrix`);
     }
-    return { price_list: listaDePreciosId, products };
-  }
-
-  async getCatalog(city: string): Promise<PricedCatalog> {
-    return this.getPricesForList(resolveCityListId(city));
-  }
-}
-
-// ---------- sheet implementation (PRICES_SHEET_ID, ~15 min refresh) ----------
-
-interface SheetRow {
-  list_id: string;
-  product_id: string;
-  product: string;
-  price: number;
-}
-
-const SHEET_TTL_MS = 15 * 60_000;
-
-export class SheetPriceProvider implements PriceProvider {
-  private rows: SheetRow[] = [];
-  private loadedAt = 0;
-
-  private async getRows(): Promise<SheetRow[]> {
-    if (this.rows.length === 0 || Date.now() - this.loadedAt > SHEET_TTL_MS) {
-      const creds = JSON.parse(config.GOOGLE_SERVICE_ACCOUNT_JSON) as {
-        client_email: string;
-        private_key: string;
-      };
-      const auth = new JWT({
-        email: creds.client_email,
-        key: creds.private_key,
-        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-      });
-      const doc = new GoogleSpreadsheet(config.PRICES_SHEET_ID, auth);
-      await doc.loadInfo();
-      const sheet = doc.sheetsByIndex[0];
-      if (!sheet) throw new Error("Prices sheet has no worksheets");
-      const rows = await sheet.getRows();
-      this.rows = rows.map((r) => ({
-        list_id: String(r.get("list_id") ?? ""),
-        product_id: String(r.get("product_id") ?? ""),
-        product: String(r.get("product") ?? ""),
-        price: Number(r.get("price") ?? 0),
-      }));
-      this.loadedAt = Date.now();
-    }
-    return this.rows;
-  }
-
-  async getPricesForList(listaDePreciosId: string): Promise<PricedCatalog> {
-    const rows = await this.getRows();
-    const products = rows
-      .filter((r) => r.list_id === listaDePreciosId)
-      .map((r) => ({ id: r.product_id, name: r.product, price: r.price }));
+    // The list prices many things; we sell only the 9 catalog SKUs (catalog/skus.ts).
+    const products = applyCatalog(raw);
     if (products.length === 0) {
-      throw new Error(`Price list ${listaDePreciosId} not found in sheet`);
+      throw new Error(`Price list ${listaDePreciosId} carries none of the catalog SKUs`);
     }
     return { price_list: listaDePreciosId, products };
   }
 
-  async getCatalog(city: string): Promise<PricedCatalog> {
-    return this.getPricesForList(resolveCityListId(city));
+  /**
+   * The same 9 SKUs are sold in every city. PRECIO LOBOS and PRECIO CAMPANA
+   * ESPECIAL price only what differs there — live, Lobos has no descartables rows
+   * and CAMPANA ESPECIAL only the two 20L botellones — so LISTA PRECIOS GENERAL
+   * fills whatever they omit. `price_list` stays the resolved id.
+   */
+  async getCatalog(city: string, opts: { frioCalor?: boolean } = {}): Promise<PricedCatalog> {
+    const listId = resolveCityListId(city, opts);
+    if (listId === config.PRICE_LIST_DEFAULT_ID) return this.getPricesForList(listId);
+    const [zone, general] = await Promise.all([
+      this.getPricesForList(listId),
+      this.getPricesForList(config.PRICE_LIST_DEFAULT_ID),
+    ]);
+    const zonePrices = new Map(zone.products.map((p) => [p.name, p]));
+    // GENERAL prices all 9, so it also supplies the sales order.
+    const products = general.products.map((p) => zonePrices.get(p.name) ?? p);
+    return { price_list: listId, products };
+  }
+
+  /** Cache miss only — never an outage fallback (a cached row is always preferred). */
+  private async fetchAndCache(listaDePreciosId: string): Promise<PricedProduct[]> {
+    const matrix = await ws.obtenerMatrizListaDePrecios(config.WS_TIPO_LISTA_ID);
+    const products = listFromMatrix(matrix, listaDePreciosId);
+    if (products.length > 0) {
+      writeList(this.db, listaDePreciosId, products, new Date().toISOString());
+    }
+    return products;
   }
 }
-
-// ---------- selection + daily sheet-vs-#10 consistency check ----------
 
 export function createPriceProvider(): PriceProvider {
-  if (!config.PRICES_SOURCE) {
-    throw new Error(
-      "PRICES_SOURCE is not set (open item 00-master §10a) — set 'waterservice' or 'sheet'",
-    );
-  }
-  return config.PRICES_SOURCE === "sheet"
-    ? new SheetPriceProvider()
-    : new WaterServicePriceProvider();
+  return new WaterServicePriceProvider();
 }
 
 /**
- * Daily consistency check when PRICES_SOURCE=sheet (01 §2): compare the sheet
- * against the #10 matrix; return human-readable mismatch descriptions for the
- * operator alert.
+ * The `prices_refresh` cron's payload: pull #10 + #11 and upsert every configured
+ * list and abono. Rows are only ever overwritten, never deleted — a failed refresh
+ * leaves the last-good prices serving.
  */
-export async function checkSheetConsistency(): Promise<string[]> {
-  const sheet = new SheetPriceProvider();
-  const wsProvider = new WaterServicePriceProvider();
-  const mismatches: string[] = [];
-  const listIds = new Set(
-    (await sheet["getRows"]()).map((r) => r.list_id).filter(Boolean),
-  );
-  for (const listId of listIds) {
-    const [fromSheet, fromWs] = await Promise.all([
-      sheet.getPricesForList(listId),
-      wsProvider.getPricesForList(listId).catch(() => null),
-    ]);
-    if (!fromWs) {
-      mismatches.push(`lista ${listId}: no existe en WaterService`);
+export async function refreshPriceCache(db: DB, abonoIds: number[]): Promise<void> {
+  const at = new Date().toISOString();
+  const matrix = await ws.obtenerMatrizListaDePrecios(config.WS_TIPO_LISTA_ID);
+  for (const listId of configuredListIds()) {
+    const products = listFromMatrix(matrix, listId);
+    if (products.length > 0) writeList(db, listId, products, at);
+  }
+  if (abonoIds.length === 0) return;
+  const abonos = await ws.obtenerAbonosTipos();
+  for (const id of abonoIds) {
+    const hit = abonos.find((a) => a.id === id);
+    if (hit) writeAbono(db, { id: hit.id, name: hit.nombreAbono, price: hit.precio }, at);
+  }
+}
+
+/**
+ * Daily catalog-completeness check. Only LISTA PRECIOS GENERAL has to carry all 9
+ * SKUs — a hole there is a hole in every city, since every other list layers on top
+ * of it (`getCatalog`). Zone lists are *expected* to be partial, so their gaps are
+ * not alerts; a zone list that can't be resolved at all still is.
+ */
+export async function checkCatalogCompleteness(provider: PriceProvider): Promise<string[]> {
+  const gaps: string[] = [];
+  for (const listId of configuredListIds()) {
+    const catalog = await provider.getPricesForList(listId).catch(() => null);
+    if (!catalog) {
+      gaps.push(`lista ${listId}: no se pudo resolver`);
       continue;
     }
-    for (const p of fromSheet.products) {
-      const wsProduct = fromWs.products.find(
-        (w) => w.id === p.id || w.name.toLowerCase() === p.name.toLowerCase(),
-      );
-      if (!wsProduct) {
-        mismatches.push(`lista ${listId}: "${p.name}" no está en WaterService`);
-      } else if (wsProduct.price !== p.price) {
-        mismatches.push(
-          `lista ${listId}: "${p.name}" planilla $${p.price} vs WaterService $${wsProduct.price}`,
-        );
-      }
+    if (listId !== config.PRICE_LIST_DEFAULT_ID) continue;
+    const missing = missingSkus(catalog.products);
+    if (missing.length > 0) {
+      gaps.push(`lista ${listId}: falta ${missing.map((s) => s.display).join(", ")}`);
     }
   }
-  return mismatches;
+  return gaps;
 }

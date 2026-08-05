@@ -13,7 +13,10 @@ import { handleDispatchOrder, handleDispatchScan } from "./pipeline/dispatch.js"
 import { handleFollowupJob } from "./engines/followups.js";
 import { handleDebtSend, handleDebtSync } from "./engines/debt.js";
 import { appendOrderRow, updateSheetTicket } from "./sheets/orders.js";
-import { checkSheetConsistency } from "./providers/prices.js";
+import { checkCatalogCompleteness, refreshPriceCache } from "./providers/prices.js";
+import { configuredAbonoIds } from "./providers/abonos.js";
+import { oldestFetchedAt, readAbono } from "./db/prices-cache.js";
+import { getPriceProvider } from "./ai/tools.js";
 import {
   handleMirrorMessageJob,
   handleMirrorStatusJob,
@@ -57,6 +60,9 @@ runner.on("chatwoot_mirror_status", handleMirrorStatusJob);
 
 // ---------- recurring jobs (each run schedules the next — restart-safe) ----------
 
+/** Two missed daily refreshes: the cron is broken, not just unlucky. */
+const STALE_PRICES_MS = 48 * 3_600_000;
+
 function scheduleDaily(type: string, hour: number): void {
   enqueue(db, type, nextLocalHour(hour), {}, `recurring:${type}`);
 }
@@ -82,23 +88,43 @@ runner.on("debt_send", async (payload, db) => {
     scheduleDaily("debt_send", config.DEBT_REMINDER_SEND_HOUR);
   }
 });
-runner.on("prices_sheet_check", async (_payload, _db) => {
+// The only thing in the service that calls WaterService for prices. Everything
+// else reads ws_price_cache, so this failing degrades to "prices are stale",
+// never to "the wizard can't quote".
+runner.on("prices_refresh", async (_payload, db) => {
   try {
-    if (config.PRICES_SOURCE === "sheet") {
-      const mismatches = await checkSheetConsistency();
-      if (mismatches.length > 0) {
-        await notifyOperator(copy.operatorSheetMismatchAlert(mismatches.join("; ")));
-      }
+    try {
+      await refreshPriceCache(db, configuredAbonoIds());
+    } catch (err) {
+      // Last-good rows stay in place — never cleared on a failed refresh.
+      await notifyOperator(copy.operatorPriceRefreshFailedAlert(String(err)));
+    }
+    // A silently failing refresh would otherwise only surface as drifted prices.
+    const oldest = oldestFetchedAt(db);
+    if (oldest && Date.now() - Date.parse(oldest) > STALE_PRICES_MS) {
+      await notifyOperator(copy.operatorPricesStaleAlert(oldest));
+    }
+    // Ungated: a SKU missing from a price list is silently hidden from that zone.
+    const gaps = await checkCatalogCompleteness(getPriceProvider());
+    if (gaps.length > 0) {
+      await notifyOperator(copy.operatorMissingSkusAlert(gaps.join("; ")));
     }
   } finally {
-    scheduleDaily("prices_sheet_check", 6);
+    scheduleDaily("prices_refresh", 6);
   }
 });
 
 scheduleDaily("dispatch_scan", 7);
 scheduleDaily("debt_sync", 3);
 scheduleDaily("debt_send", config.DEBT_REMINDER_SEND_HOUR);
-scheduleDaily("prices_sheet_check", 6);
+scheduleDaily("prices_refresh", 6);
+// Price lists self-heal on the first /api/prices miss, but abonos have no
+// read-path fetch: an uncached abono id hides the frío/calor card entirely. So
+// refresh at boot whenever one is missing — covers a cold DB and, just as often,
+// a newly configured id in FRIO_CALOR_ABONO_MAP.
+if (configuredAbonoIds().some((id) => !readAbono(db, id))) {
+  enqueue(db, "prices_refresh", new Date(), {}, "prices_refresh:boot");
+}
 
 // ---------- start ----------
 

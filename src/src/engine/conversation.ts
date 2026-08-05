@@ -25,10 +25,9 @@ import { onLeadReply, scheduleFollowups } from "../engines/followups.js";
 import { confirmOrder } from "../pipeline/orders.js";
 import { mirrorLeadSync, mirrorMessage, reopenIfArchived } from "../crm/mirror.js";
 import type { CoverageResult, PricedCatalog } from "../providers/types.js";
+import { matchSkuByText } from "../catalog/skus.js";
+import { normalizeText } from "../text.js";
 
-function normalizeText(s: string): string {
-  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
-}
 
 async function reply(lead: Lead, phoneNumberId: string, db: DB, text: string): Promise<void> {
   await sendText(phoneNumberId, lead.phone, text);
@@ -58,21 +57,11 @@ function matchProduct(text: string, catalog: PricedCatalog): string | null {
     const name = normalizeText(p.name);
     if (t.includes(name) || name.includes(t)) return p.name;
   }
-  // Loose aliases: "bidon de 20", "20 litros", "soda", "dispenser"…
-  const aliases: [RegExp, RegExp][] = [
-    [/bidon.*20|20\s*l/, /bidon.*20|20\s*l/],
-    [/bidon.*12|12\s*l/, /bidon.*12|12\s*l/],
-    [/soda|sifon/, /soda|sifon/],
-    [/saboriz/, /saboriz/],
-    [/frio|calor/, /frio|calor/],
-    [/dispenser/, /dispenser/],
-  ];
-  for (const [userRe, productRe] of aliases) {
-    if (!userRe.test(t)) continue;
-    const hit = catalog.products.find((p) => productRe.test(normalizeText(p.name)));
-    if (hit) return hit.name;
-  }
-  return null;
+  // Loose aliases from the SKU registry: "bidón de 20", "bajo sodio", "powerade"…
+  const sku = matchSkuByText(text);
+  if (!sku) return null;
+  // Only offer it if this city's list actually priced it.
+  return catalog.products.find((p) => p.name === sku.display)?.name ?? null;
 }
 
 function matchDeliveryOption(text: string, coverage: CoverageResult) {

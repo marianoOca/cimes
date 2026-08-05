@@ -444,8 +444,9 @@ non-shortcut slug via `/api/resolve-city`.
 for everyone, `CITY_PRICE_LIST_MAP` for per-city exceptions (Lobos → PRECIO LOBOS). `resolveCityListId`
 no longer throws; product step + `/api/orders` price by this rule, **not** the neighbour-derived
 list (so shown == charged). Set `PRICE_LIST_DEFAULT_ID` + `CITY_PRICE_LIST_MAP={"lobos":"<id>"}`
-in `.env` with the real WS `lista_id`s. **Deferred:** `PRECIO CAMPANA ESPECIAL` (frío/calor) +
-the new "add a frío-calor dispenser" step between city and product — separate plan.
+in `.env` with the real WS `lista_id`s. ~~**Deferred:** `PRECIO CAMPANA ESPECIAL` (frío/calor) +
+the new "add a frío-calor dispenser" step between city and product — separate plan.~~ **Both done
+2026-08-04, see below.**
 
 typecheck clean, **82 tests** (added `cities.test.ts`; updated conversation/website; removed the
 waitlist/registrar_zona/esperando_zona tests). Shortcut cities stay 8 (incl. Escobar). Docs
@@ -494,3 +495,164 @@ classic-namespace over ES modules to keep the jsdom+eval test harness + zero too
 the plan). `app.js` **deleted** — the per-file map is in `website/CONTEXT.md`. Test harness evals the
 ordered list (`website.test.ts`). typecheck clean, **90 tests** (unchanged; pure reorg). Earlier
 PROGRESS entries that say `app.js` are historical — the wizard now lives in `website/js/`.
+
+**Product catalog reworked to 9 fixed SKUs (2026-08-03).** The client closed the product question
+(`docs/preguntas_licha.md §5`): CIMES sells exactly 9 SKUs, the **same in every zone**, no matter
+what a WaterService price list contains. Before this, `providers/prices.ts` projected *every* priced
+article into the catalog, so dispensers/abonos/`Sanitizacion de Dispenser` leaked into the WhatsApp
+list and the wizard; separately the AI prompt and the home grid each hardcoded their own divergent
+list.
+
+New **`src/src/catalog/skus.ts`** is the single source of truth: display name, WaterService matching
+(pinned `articulo_id` first, prefix-tolerant name regex as fallback — CIMES names articles
+`"10002  -  BOTELLON 20L"`), free-text aliases, sales order (Botellón 20L first — best margin),
+`clientType`. `applyCatalog()` iterates SKUS (not the raw list), which yields the ordering, the
+dedupe, the implicit drop of everything else in one pass; `missingSkus()` feeds the alert. Both
+providers (WS `#10` and sheet) call it, so the two paths can't drift. A price list is now a source of
+**prices only**.
+
+Derived, no longer hardcoded: `ai/prompt.ts` catalog line, `engine/conversation.ts` `matchProduct`
+aliases (added the missing gaseosa / agua 2L / isotónica / bajo-sodio cases, dropped dispenser),
+`sheets/orders.ts` `clientTypeOf` (keyword fallback kept for legacy rows + the free-text
+`confirm_order` path — the only remaining producer of `frio_calor`), and `website/js/wizard.js`
+`productImage` (regex chain → display-name map). `dev/stub-backend.ts` now feeds raw WS-shaped rows
+through the real filter. `normalizeText` extracted to `src/src/text.ts`.
+
+**Missing-SKU alert:** hidden, not fatal — so `checkCatalogCompleteness()` runs ungated in the daily
+`prices_sheet_check` job and pings the operator (`copy.operatorMissingSkusAlert`). A list with prices
+but zero catalog SKUs still throws.
+
+**`npm run dump:prices`** (`src/scripts/dump-price-matrix.ts`) — read-only `#10` dump. Run it to (a)
+pin the 9 `articulo_id`s (all currently `wsId: null`, i.e. regex path) and (b) identify which
+`lista_id` is `LISTA PRECIOS GENERAL` / `PRECIO LOBOS` / `PRECIO CAMPANA ESPECIAL`.
+
+typecheck clean, **115 tests** (new `catalog-skus.test.ts`: prefix tolerance, the NA-vs-plain guard,
+AGUA 2L not swallowing AGUA SABORIZADA, non-SKU drops, sales order, pinned-id precedence, alias
+table, `missingSkus`; plus a website test asserting all 9 SKUs resolve to a real photo file).
+
+**Open / not done:**
+- **1 test red on purpose:** `website.test.ts > every catalog SKU has a product photo` — waiting on
+  `website/assets/products/botellon-20l-ms.webp` and `isotonica.webp` (Mariano is adding them). Green
+  the moment both files land; no code change needed.
+- **`PRICE_LIST_DEFAULT_ID` still absent from `src/.env`** while `CITY_PRICE_LIST_MAP` covers only 7
+  cities → `resolveCityListId` throws for Lobos/Escobar and dead-ends the wizard. Set it to the
+  GENERAL list id once `dump:prices` reveals it.
+- SKU `wsId`s not yet pinned (regex path is fully functional meanwhile).
+- Home marketing grid (`website/copy.es-AR.js`, 7 merged cards) deliberately **out of scope** — still
+  its own hardcoded list.
+
+## 2026-08-04 — Dispenser step (frío/calor comodato) + WaterService-only prices cached in SQLite
+
+Two pieces that turned out to be one: offering the abono meant reading a third price
+list and #11, which would have deepened the site's dependence on WaterService uptime —
+so the prices moved into SQLite first.
+
+**Part A — prices.** WaterService is now the only source: `SheetPriceProvider`,
+`checkSheetConsistency`, `PRICES_SOURCE` and `PRICES_SHEET_ID` are gone
+(`00-master §10a` closed). `GOOGLE_SERVICE_ACCOUNT_JSON` stays — the orders *mirror*
+sheet (`sheets/orders.ts`) is a different sheet and untouched. New `ws_price_cache`
+table + `db/prices-cache.ts`; `WaterServicePriceProvider` reads it (the in-memory
+`MATRIX_TTL_MS` cache is deleted — the DB is the cache). The daily
+`prices_sheet_check` job became **`prices_refresh`**: pulls #10 + #11, upserts every
+configured list and abono, alerts on failure and on rows older than 48h. **A failed
+refresh never deletes** and stale rows are always served — a quote we can't produce is
+a lead we never save. The only live call left on the read path is a cache *miss*
+(cold DB, or a list id the cron hasn't seen), which fetches once and writes through.
+
+**Part B — the step.** Wizard is **6 steps**: ciudad → **dispenser** → productos →
+datos → envío → resumen. Step 2 carries two decisions (dispenser + común/bajo sodio,
+defaulting to común) because they're one decision to the visitor and together they pick
+the price list, the catalog and the abono. It also owns the `/api/prices` call, moved
+one step earlier. `Siguiente` stays **enabled** and prompts when nothing is chosen —
+a dead button doesn't say what's missing.
+
+- **List rule:** `resolveCityListId(city, {frioCalor})`. PRECIO CAMPANA ESPECIAL
+  (Zárate/Campana/Escobar) applies **only** to a comodato customer; the same city
+  buying loose bottles still gets GENERAL. Lobos keeps PRECIO LOBOS either way.
+- **No price lives in this repo.** `FRIO_CALOR_CITY_PRICE_LIST_MAP` and
+  `FRIO_CALOR_ABONO_MAP` hold **ids**; amounts come from #11 (GENERAL 1/7, CAMPANA
+  11/12, LOBOS 13/17) through the cache. `getAbono` returns null rather than guessing,
+  and the site then hides the frío/calor card instead of quoting a number.
+- **Cart math** (`resolveCartLines`, mirrored client-side): first 4×20L of the chosen
+  water bill at 0, 5th onward at that list's normal 20L price — the excedente is not a
+  stored number. Abono rides as a synthetic half-price line that bypasses the catalog
+  lookup; its `ABONO_LINE_MARKER` is what makes the row `client_type=frio_calor`
+  downstream (a frío/calor order always carries botellones, so the SKU scan alone read
+  it as `bidon`). An abono with empty `items` is a valid order.
+- **Step 3 under frío/calor** prefills the included botellón to **4** (they're already
+  paying for those) and the card says the listed price applies from the 5th. Summary
+  splits `Subtotal productos` from the abono line before `Total a pagar en la entrega`.
+- Water choice filters the catalog: Natural → 20L+12L of that water; Frío/Calor → only
+  that water's 20L; Sin dispenser → everything. Non-bottle SKUs always shown.
+
+typecheck clean, **140 tests** (new `prices-cache.test.ts`, `frio-calor-pricing.test.ts`,
+frío/calor cases in `orders-cart.test.ts`, 7 new website cases; `bootToProduct` now
+passes through step 2 with "Sin dispenser" so the pre-existing walks are unchanged).
+Docs 00/01/04 + the BC doc's abono section updated.
+
+**Open / not done:**
+- **Visit frequency deliberately not addressed** (weekly / 15 days / monthly). Client
+  decision, not a UI one: putting it on the signup page nudges customers off the weekly
+  visit CIMES uses to collect payment and check the equipment. Nothing on the site
+  mentions cadence.
+- **WhatsApp bot doesn't know about abonos yet** — `02-chatbot.md`'s prompt/tools still
+  have no frío/calor pricing. Separate task.
+- Natural's "mínimo 1 botellón por mes" is still unstated on the site (decided out of
+  scope this session).
+
+## 2026-08-04 (cont.) — real price-list ids wired; especial list is an overlay
+
+`--real` QA hit `500 No price list configured` on Lobos: `src/.env` still had the
+pre-rework price block (no `PRICE_LIST_DEFAULT_ID`, no frío/calor vars, a stale
+`PRICES_SOURCE`, and `campana → 10` pointing at "PRECIO CAMPANA", which we ignore).
+Discovered the live ids with `npm run dump:prices` and #11: **6** GENERAL,
+**9** LOBOS, **11** CAMPANA ESPECIAL; abonos 1/7 · 11/12 · 13/17 exactly as the client
+listed. `src/.env` + `.env.example` now carry those. Escobar is `"belén de escobar"` in
+`engine/cities.ts`, so the frío/calor map keys that spelling (bare `"escobar"` kept as
+an alias for hand-typed input) — a missed key silently sells the comodato at GENERAL.
+
+Two things the live matrix revealed:
+
+- **PRECIO CAMPANA ESPECIAL prices only the two 20L botellones.** Served as a catalog it
+  gave a Campana frío/calor customer a two-product step. `getCatalog` now **merges**:
+  city list supplies the catalog, especial overrides what it prices. Verified live —
+  Campana + frío/calor → 20L $9.500 / 20L NA $10.000 with 12L and descartables at
+  GENERAL, `price_list` still `11`.
+- **Cold-DB abonos.** Price lists self-heal on the first `/api/prices` miss, but
+  `getAbono` has no read-path fetch, so a fresh deploy would hide the frío/calor card
+  until 6am. `index.ts` now enqueues `prices_refresh` immediately when
+  `ws_price_cache` is empty.
+
+Also fixed the dispenser badges: the cards reused the hero `.badge` (white on
+translucent, for a dark photo) so GRATIS / 50% OFF were invisible on white. Added
+light-surface `.badge-free` / `.badge-promo` and dropped the empty icon slot.
+
+143 tests, typecheck clean. Live-verified: Lobos → list 9 (abono $32.000/$33.200),
+Campana + frío/calor → 11 ($38.000/$40.000), Campana without dispenser → 6, Mercedes → 6.
+
+**Lobos gap resolved (client rule):** the 9 SKUs sell everywhere, and a SKU the
+resolved list doesn't price takes the GENERAL price. Three lists, no more: GENERAL is
+the fallback, PRECIO LOBOS and PRECIO CAMPANA ESPECIAL override what they price. Live:
+Lobos now returns all 9 (own prices for the four botellones + soda, GENERAL for the
+descartables); Campana + frío/calor returns 9 with especial 20L. Gap check narrowed to
+match: only GENERAL must be complete, partial zone lists are the expected shape.
+Both #10 and #11 land in `ws_price_cache` (verified: rows for lists 6/9/11 and abonos
+1/7/11/12/13/17), and the boot refresh now fires when any configured abono id is
+missing — not just on an empty cache, which is why a newly added id stayed hidden.
+
+Copy can bold now: `**así**` in `copy.es-AR.js` renders through `App.rich()`
+(`js/util.js` — escapes first, so the markers are the only markup a copy edit can
+introduce), styled once as `strong` (brand blue, bold). Used for the abono's
+first-month price and "otros productos". The frío/calor price moved into
+`frioCalor.body` as its first bullet (the product step quotes that same line), and the
+card's fine print sits above the photo now.
+Mobile (≤720px) turns the dispenser photo into a watermark behind the card — 11%
+opacity, desaturated, masked to fade out towards the text — so the water toggle gets
+the full row. Replaces the old ≤380px rule that just hid the photo.
+
+Phone mask is data-driven now (`website/js/phone.js`): the area/local split comes from
+`coverage.areaCodes`, longest match first, with the local part filling out the 10
+national digits — 4-digit (2323), 3-digit (348 Escobar, 230 Pilar, 220 Las Heras) and
+Buenos Aires' 2-digit 11 all group and save correctly, with or without a typed trunk 0.
+Adding a city to `areaCodes` needs no change in phone.js. Verified every code in the
+list round-trips to the right E.164.

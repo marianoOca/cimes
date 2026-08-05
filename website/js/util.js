@@ -20,6 +20,13 @@
     })[c]);
   };
 
+  // Copy strings mark emphasis with `**así**` (copy.es-AR.js) — escaped first, so
+  // those markers are the only markup a copy edit can introduce. Renders as
+  // <strong>, styled once in styles.css.
+  App.rich = function rich(s) {
+    return App.esc(s).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  };
+
   App.resolvePath = function resolvePath(obj, path) {
     return path.split(".").reduce((o, k) => (o ? o[k] : undefined), obj);
   };

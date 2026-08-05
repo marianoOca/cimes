@@ -50,8 +50,8 @@ const input = {
   address: "Rivadavia 770",
   cross_streets: "Mitre y Lavalle",
   items: [
-    { product: "Bidon x 20 lts", qty: 2 },
-    { product: "Soda sifón", qty: 1 },
+    { product: "Botellón 20L", qty: 2 },
+    { product: "Soda en Sifón 1,5L", qty: 1 },
   ],
 };
 
@@ -67,7 +67,7 @@ describe("manual review — website capture (covered city, no delivery time)", (
     expect(lead!.source).toBe("web");
     expect(lead!.city).toBe("luján");
     expect(lead!.address).toBe("Rivadavia 770");
-    expect(lead!.product).toBe("2x Bidon x 20 lts, 1x Soda sifón"); // items summarized
+    expect(lead!.product).toBe("2x Botellón 20L, 1x Soda en Sifón 1,5L"); // items summarized
     expect(lead!.ai_enabled).toBe(false); // human owns it now
     expect(lead!.labels).toContain("revision_cobertura");
 

@@ -30,8 +30,10 @@ deterministic work (prices, coverage, days).
   (`src/.env`). **This is the API-integration test.** Coverage/prices are read-only
   (safe to hammer); **"Confirmar pedido" writes a REAL order** (client + ticket +
   Sheet row) — use a disposable test client and delete it after.
-- `--real` prereqs in `src/.env`: WaterService creds + `PRICES_SOURCE` +
-  `PRICE_LIST_DEFAULT_ID` + `CITY_PRICE_LIST_MAP` (else `/api/prices` throws).
+- `--real` prereqs in `src/.env`: WaterService creds + `PRICE_LIST_DEFAULT_ID` +
+  `CITY_PRICE_LIST_MAP` (else `/api/prices` throws). For the frío/calor step also
+  `FRIO_CALOR_CITY_PRICE_LIST_MAP` + `FRIO_CALOR_ABONO_MAP` — **ids only, never
+  prices**; without them the wizard just hides the frío/calor card.
 
 ## Workspaces
 
@@ -57,6 +59,9 @@ English file names. Spec/decision docs: `docs/NN-topic.md`. Copy module: `src/sr
 
 - WaterService errors are in the body (`error != 0`), never the HTTP status.
 - The AI never computes prices/coverage/days — tools/providers only.
+- No price is ever written in this repo. Amounts come from WaterService (#10, #11)
+  via `ws_price_cache`; env holds **ids** only. The request path never calls
+  WaterService — an outage must degrade to stale prices, never to a dead wizard.
 - No Spanish strings inline — everything through `copy.es-AR.ts`.
 - Crons idempotent + restart-safe; timer state lives in SQLite.
 - Timezone `America/Argentina/Buenos_Aires` for local-day logic; UTC in storage.

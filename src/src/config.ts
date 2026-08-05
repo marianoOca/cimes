@@ -7,6 +7,14 @@ const jsonRecord = (fallback: Record<string, string>) =>
     .transform((s) => JSON.parse(s) as Record<string, string>)
     .catch(fallback);
 
+/** Price-list id → the abono id for each water type. Ids only; prices come from #11. */
+export type AbonoMap = Record<string, { comun: number; bajo_sodio: number }>;
+const jsonAbonoMap = () =>
+  z
+    .string()
+    .transform((s) => JSON.parse(s) as AbonoMap)
+    .catch({} as AbonoMap);
+
 const envSchema = z.object({
   // chatbot
   KAPSO_API_KEY: z.string().default(""),
@@ -64,9 +72,15 @@ const envSchema = z.object({
   // WaterService neighbors; the neighbor-derived list is not used for pricing.
   CITY_PRICE_LIST_MAP: jsonRecord({}),
   PRICE_LIST_DEFAULT_ID: z.string().default(""),
-  // PRICES_SOURCE is a genuinely open item (00-master §10a): no default forced.
-  PRICES_SOURCE: z.enum(["waterservice", "sheet"]).optional(),
-  PRICES_SHEET_ID: z.string().default(""),
+  // Frío/calor comodato. Ids only — every price is read live from WaterService
+  // (#10 lists, #11 abonos) and mirrored into ws_price_cache; nothing is hardcoded.
+  // PRECIO CAMPANA ESPECIAL applies ONLY to a frío/calor customer: the same city
+  // without a dispenser still resolves through CITY_PRICE_LIST_MAP.
+  // e.g. {"campana":"<lista_id>","zarate":"<lista_id>","escobar":"<lista_id>"}
+  FRIO_CALOR_CITY_PRICE_LIST_MAP: jsonRecord({}),
+  // Resolved price list → abono id per water type, so the abono always follows
+  // whichever list the resolver picked. e.g. {"<lista_id>":{"comun":1,"bajo_sodio":7}}
+  FRIO_CALOR_ABONO_MAP: jsonAbonoMap(),
 
   OPERATOR_PHONE: z.string().default(""),
 

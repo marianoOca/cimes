@@ -129,6 +129,17 @@ function migrate(db: DB): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- Local mirror of the WaterService prices (#10 lists, #11 abonos). The request
+    -- path reads only from here; the prices_refresh cron is the only writer.
+    -- See db/prices-cache.ts.
+    CREATE TABLE IF NOT EXISTS ws_price_cache (
+      kind       TEXT NOT NULL CHECK (kind IN ('price_list','abono')),
+      key        TEXT NOT NULL,
+      payload    TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (kind, key)
+    );
   `);
 
   // Additive column migrations for DBs created before the column existed

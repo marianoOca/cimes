@@ -29,13 +29,14 @@ import { setPriceProvider } from "../src/ai/tools.js";
 import { sendButtons, sendList, sendLocation, sendText } from "../src/kapso/send.js";
 import type { NormalizedInbound } from "../src/kapso/webhook.js";
 
+// Post-filter shape: the provider always returns canonical display names in sales
+// order (see catalog-skus.test.ts for the raw WaterService -> display mapping).
 const catalog = {
   price_list: "5",
   products: [
-    { id: "1", name: "Bidon x 20 lts", price: 800 },
-    { id: "2", name: "Bidon x 12 lts", price: 500 },
-    { id: "3", name: "Soda sifón", price: 300 },
-    { id: "4", name: "Dispenser frío-calor", price: 30000 },
+    { id: "1", name: "Botellón 20L", price: 800 },
+    { id: "2", name: "Botellón 12L", price: 500 },
+    { id: "3", name: "Soda en Sifón 1,5L", price: 300 },
   ],
 };
 
@@ -85,7 +86,7 @@ describe("conversation engine — Flow A happy path (deterministic, no AI)", () 
     );
     const lead = getLeadByPhone(db, "5491100000042")!;
     expect(lead.city).toBe("Luján"); // snapped to the canonical BA-city name
-    expect(lead.product).toBe("Bidon x 20 lts");
+    expect(lead.product).toBe("Botellón 20L");
     expect(lead.price).toBe(800);
     expect(lead.stage).toBe("datos_entrega");
     // Quote sent in the same exchange (producto+price merged).

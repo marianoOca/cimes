@@ -9,7 +9,7 @@ Three deployables, three targets. Order of go-live steps: `docs/00-master.md §1
 # Node 22+. On the VPS:
 git clone <repo> cimes && cd cimes/src
 npm ci
-cp .env.example .env   # fill everything; PRICES_SOURCE must be set explicitly
+cp .env.example .env   # fill everything; the price-list + abono ids must be real
 npm run typecheck && npm test
 ```
 

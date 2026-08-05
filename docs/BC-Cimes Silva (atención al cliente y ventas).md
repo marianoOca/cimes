@@ -165,27 +165,19 @@ Precios de botellones:
 \- Soda 1,5 litros: $1.600  
 \- Soda 1/2 litro: $800
 
-Servicio de dispenser frío/calor — 3 opciones de abono:
+Servicio de dispenser frío/calor — abono mensual (**una sola modalidad**, actualizado 2026-08):
 
-Opción principal: Frío/calor con 4 botellones de 20 litros al mes  
-\- Abono mensual: $34.000
+Frío/calor con 4 botellones de 20 litros al mes  
+\- Común: abono mensual $34.000  
+\- Bajo en sodio: abono mensual $36.000
 
-Opción reducida: Frío/calor con 3 botellones de 20 litros al mes  
-\- Abono mensual: $25.500
-
-Segunda opción: Frío/calor con 5 botellones de 12 litros al mes  
-\- Abono mensual: $30.000
-
-Todas las opciones de frío/calor:  
+Reglas del abono frío/calor:  
 \- Se paga por adelantado entre el 1 y el 10 de cada mes  
-\- El primer abono se paga al momento de la entrega  
-\- Los botellones que excedan los incluidos en el abono se cobran aparte por unidad
-
-Botellones excedentes en frío/calor (mismo precio que botellones sueltos):  
-\- Botellón 20 litros: $8.500  
-\- Botellón 12 litros: $6.000  
-\- Bajo sodio 20 litros: $9.000  
-\- Bajo sodio 12 litros: $6.500
+\- El primer abono se paga al momento de la entrega (clientes nuevos: 50% off, ver PROMO 1)  
+\- Es una tarifa fija: se cobra completa aunque se consuman menos de 4 botellones  
+\- No se pueden mezclar botellones comunes y bajo sodio en un mismo abono  
+\- Los 4 botellones son el total del mes y se van dejando a medida que se consumen, no todos juntos  
+\- **A partir del 5to botellón del mes** se cobra aparte, al precio de botellón suelto de la lista que corresponda
 
 \#\#\# LISTA 2 — Precios para Campana, Zárate, Escobar y Loma Verde
 
@@ -199,27 +191,19 @@ Precios de botellones (sin frío/calor):
 \- Soda 1,5 litros: $1.600  
 \- Soda 1/2 litro: $800
 
-Servicio de dispenser frío/calor — 3 opciones de abono:
+Servicio de dispenser frío/calor — abono mensual (**una sola modalidad**, actualizado 2026-08):
 
-Opción principal: Frío/calor con 4 botellones de 20 litros al mes  
-\- Abono mensual: $38.000
+El abono frío/calor de **Campana, Zárate y Escobar** usa la lista PRECIO CAMPANA ESPECIAL — que existe **sólo** para el comodato. Un cliente de esas ciudades que compra botellones sueltos paga la lista general.
 
-Opción reducida: Frío/calor con 3 botellones de 20 litros al mes  
-\- Abono mensual: $28.500
+Frío/calor con 4 botellones de 20 litros al mes  
+\- Común: abono mensual $38.000  
+\- Bajo en sodio: abono mensual $40.000
 
-Segunda opción: Frío/calor con 5 botellones de 12 litros al mes  
-\- Abono mensual: $30.000
+Lobos tiene su propia lista:  
+\- Común: abono mensual $32.000  
+\- Bajo en sodio: abono mensual $33.200
 
-Todas las opciones de frío/calor:  
-\- Se paga por adelantado entre el 1 y el 10 de cada mes  
-\- El primer abono se paga al momento de la entrega  
-\- Los botellones que excedan los incluidos en el abono se cobran aparte por unidad
-
-IMPORTANTE — Botellones excedentes en frío/calor (precio especial, diferente a los sueltos):  
-\- Botellón 20 litros: $9.500  
-\- Botellón 12 litros: $6.000  
-\- Bajo sodio 20 litros: $10.000  
-\- Bajo sodio 12 litros: $6.500
+Aplican las mismas reglas del abono que en la LISTA 1 (pago del 1 al 10, tarifa fija, sin mezclar aguas, excedente a partir del 5to botellón al precio de la lista que corresponda).
 
 \#\#\# Gaseosas, aguas saborizadas y descartables (MISMO PRECIO para todas las ciudades)
 
@@ -236,8 +220,10 @@ IMPORTANTE — Botellones excedentes en frío/calor (precio especial, diferente 
 
 \#\# ¿CÓMO FUNCIONA EL DISPENSER FRÍO/CALOR?
 
+> **Fuente de verdad de los abonos:** WaterService #11 `ObtenerAbonosTipos` (ids 1/7 general, 11/12 Campana especial, 13/17 Lobos). Los montos de arriba son una foto para lectura humana — el sistema nunca los guarda, los lee de ahí (`docs/01-core-api.md §2.1`).
+
 \- NO vendemos las máquinas frío/calor. El servicio funciona con un abono mensual que incluye botellones por mes más las visitas a domicilio.  
-\- Hay 3 opciones de abono según la cantidad y tamaño de botellón (4x20L, 3x20L, 5x12L). Los precios varían según la ciudad.  
+\- Hay una sola modalidad de abono: 4 botellones de 20L por mes, en común o bajo en sodio (no se mezclan). Los precios varían según la ciudad.  
 \- La máquina es propiedad de CIMES y se entrega en préstamo al cliente mediante la firma de un contrato de comodato.  
 \- Si se acumulan 2 meses de abono impago, se retira el equipo del domicilio. Para reactivar el servicio, es necesario cancelar la deuda pendiente.  
 \- El abono se cobra por adelantado, entre el 1 y el 10 de cada mes.  

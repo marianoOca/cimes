@@ -51,7 +51,7 @@ function readyLead(db: ReturnType<typeof openDb>) {
     city: "luján",
     address: "Rivadavia 770",
     cross_streets: "Mitre y Lavalle",
-    product: "Bidon x 20 lts",
+    product: "Botellón 20L",
     price: 800,
     price_list: "5",
     route: "19",

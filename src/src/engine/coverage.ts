@@ -20,7 +20,6 @@ export const COVERED_CITIES = [
   "chivilcoy",
   "campana",
   "zárate",
-  "Escobar",
 ];
 
 const geocoding = { provider: createGeocodingProvider() };

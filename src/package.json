@@ -8,6 +8,7 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "dev:stub": "tsx ../dev/stub-backend.ts",
     "start": "node --env-file=.env --import tsx src/index.ts",
+    "dump:prices": "tsx --env-file=.env scripts/dump-price-matrix.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],

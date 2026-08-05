@@ -10,33 +10,51 @@
   function phoneIsAR(digits) {
     return digits.startsWith("549");
   }
-  // First digit after "549" picks the AR shape:
-  //  "0" -> 011-trunk-style Buenos Aires: 3-digit area, 8-digit local
-  //  "1" -> 11/15 Buenos Aires: 2-digit area, 8-digit local
-  //  else -> provincial (Mercedes/Luján/etc.): 4-digit area, 6-digit local
+  // An AR mobile number is always 10 national digits — but the area/local split
+  // isn't guessable from the first digit: our cities run 4-digit (Luján 2323),
+  // 3-digit (Escobar 348, Pilar 230) and Buenos Aires' 2-digit 11. So the codes we
+  // serve come from the copy module, matched longest-first, and the local part is
+  // whatever's left of the 10. Adding a city to `coverage.areaCodes` is enough —
+  // nothing here needs to change.
+  const AR_NATIONAL_DIGITS = 10;
+  const AREAS = Object.values(
+    (App.COPY && App.COPY.coverage && App.COPY.coverage.areaCodes) || {},
+  ).map(String);
+  function areaLenOf(d) {
+    // `d.length >= len` matters: slice() silently returns a short string, so a
+    // 3-digit code like 348 would match the 4-digit pass and pad the mask to "348_".
+    for (const len of [4, 3, 2]) {
+      if (d.length >= len && AREAS.indexOf(d.slice(0, len)) >= 0) return len;
+    }
+    // Unknown code (still typing, or a city we don't serve): 11/15 is Buenos Aires,
+    // anything else takes the 4-digit shape, the commonest around here.
+    return d[0] === "1" ? 2 : 4;
+  }
+  // A leading 0 is the trunk prefix, typed out of habit (011…, 0348…). It's shown
+  // as typed but never saved, so it counts as an extra digit on top of the 10.
   // All three Buenos Aires spellings (11/15/011) save to the same E.164 area "11".
   function phoneModeOf(arDigits) {
-    if (arDigits.startsWith("0348")) return { areaLen: 4, localLen: 7 }; // Escobar: 4-digit "0348" area, 7-digit local
-    if (arDigits[0] === "0") return { areaLen: 3, localLen: 8 };
-    if (arDigits[0] === "1") return { areaLen: 2, localLen: 8 };
-    return { areaLen: 4, localLen: 6 };
+    const trunk = arDigits[0] === "0" ? 1 : 0;
+    const areaLen = areaLenOf(arDigits.slice(trunk));
+    return { trunk, areaLen, localLen: AR_NATIONAL_DIGITS - areaLen };
   }
   // Total digit count (after "+") for the current shape — AR has a known
   // target; a foreign number doesn't, so cap at E.164's 15-digit max.
   function phoneTotal(digits) {
     if (!phoneIsAR(digits)) return 15;
     const m = phoneModeOf(digits.slice(3));
-    return 3 + m.areaLen + m.localLen;
+    return 3 + m.trunk + m.areaLen + m.localLen;
   }
   // What the input shows: only digits typed so far, grouped with a "-" once
   // the AR local part passes its fixed split point.
   function phoneReal(digits) {
     if (!phoneIsAR(digits)) return "+" + digits.slice(0, 15);
     const arDigits = digits.slice(3);
-    const { areaLen, localLen } = phoneModeOf(arDigits);
-    const d = arDigits.slice(0, areaLen + localLen);
-    const area = d.slice(0, areaLen);
-    const local = d.slice(areaLen);
+    const { trunk, areaLen, localLen } = phoneModeOf(arDigits);
+    const d = arDigits.slice(0, trunk + areaLen + localLen);
+    // The trunk 0 rides along with the area group: "011", "0348".
+    const area = d.slice(0, trunk + areaLen);
+    const local = d.slice(trunk + areaLen);
     let out = "+54 9" + (area ? " " + area : "");
     if (local) {
       const split = localLen - 4;
@@ -50,9 +68,11 @@
   function phoneFull(digits) {
     if (!phoneIsAR(digits)) return phoneReal(digits);
     const arDigits = digits.slice(3);
-    const { areaLen, localLen } = phoneModeOf(arDigits);
-    const area = arDigits.slice(0, areaLen).padEnd(areaLen, "_");
-    const local = arDigits.slice(areaLen, areaLen + localLen).padEnd(localLen, "_");
+    const { trunk, areaLen, localLen } = phoneModeOf(arDigits);
+    const area = arDigits.slice(0, trunk + areaLen).padEnd(trunk + areaLen, "_");
+    const local = arDigits
+      .slice(trunk + areaLen, trunk + areaLen + localLen)
+      .padEnd(localLen, "_");
     const split = localLen - 4;
     return "+54 9 " + area + " " + local.slice(0, split) + "-" + local.slice(split);
   }
@@ -61,9 +81,10 @@
   function phoneToE164(digits) {
     if (!phoneIsAR(digits)) return "+" + digits;
     const arDigits = digits.slice(3);
-    const { areaLen, localLen } = phoneModeOf(arDigits);
-    const area = areaLen === 4 ? arDigits.slice(0, 4).replace(/^0/, "") : "11"; // drop Escobar trunk 0 ("0348" -> "348")
-    const local = arDigits.slice(areaLen, areaLen + localLen);
+    const { trunk, areaLen, localLen } = phoneModeOf(arDigits);
+    // Trunk 0 dropped; a 2-digit area is Buenos Aires however it was spelled (11/15).
+    const area = areaLen === 2 ? "11" : arDigits.slice(trunk, trunk + areaLen);
+    const local = arDigits.slice(trunk + areaLen, trunk + areaLen + localLen);
     return "+549" + area + local;
   }
   // A field is complete when its known AR target is fully typed; a foreign

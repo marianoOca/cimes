@@ -12,6 +12,9 @@
   const state = {
     city: null,
     catalog: null, // { price_list, products }: exactly one city's list
+    frioCalor: null, // { comun, bajo_sodio }: abono + excedente, or null if unpriceable
+    dispenser: null, // "natural" | "frio_calor" | "ninguno"
+    waterType: null, // "comun" | "bajo_sodio" (null when dispenser === "ninguno")
     cart: null, // [{ id, name, price, qty }]: multi-item selection
     data: null, // { firstName, lastName, phone, street, number, crossStreets }
     coverage: null,
@@ -31,19 +34,64 @@
     return "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
   }
   App.money = money;
-  // Map a catalog product name to a local photo; CIMES logo when nothing matches.
+  // Catalog product name -> local photo. The API only ever returns the 9 canonical
+  // display names from the SKU registry (src/src/catalog/skus.ts) — keep this map in
+  // sync when a SKU is added. Logo is the last resort (unknown or missing asset).
   // Root-relative so it resolves on /alta/ (a subdirectory), not only the home page.
+  var PRODUCT_IMAGES = {
+    "botellon 20l": "botellon-20l.webp",
+    "botellon 12l": "botellon-12l.webp",
+    "botellon 20l bajo sodio": "botellon-20l-ms.webp",
+    "botellon 12l bajo sodio": "botellon-12l-ms.webp",
+    "soda en sifon 1,5l": "soda-sifon.webp",
+    "agua saborizada 1,5l": "saborizada.webp",
+    "gaseosa 2l": "gaseosas.webp",
+    "agua 2l": "agua-botellas.webp",
+    "isotonica cimes 750ml": "isotonica.webp",
+  };
   App.productImage = function productImage(name) {
-    const s = String(name || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-    const img = (f) => "/assets/products/" + f;
-    if (/soda|sifon/.test(s)) return img("soda-sifon.webp");
-    if (/saboriz/.test(s)) return img("saborizada.webp");
-    if (/gaseosa/.test(s)) return img("gaseosas.webp");
-    if (/12/.test(s) && /sodio|menos|\bms\b/.test(s)) return img("botellon-12l-ms.webp");
-    if (/20/.test(s)) return img("botellon-20l.webp");
-    if (/12/.test(s)) return img("botellon-12l.webp");
-    if (/botella|agua/.test(s)) return img("agua-botellas.webp");
-    return "/assets/logo-cimes.png";
+    const s = String(name || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    const file = PRODUCT_IMAGES[s];
+    return file ? "/assets/products/" + file : "/assets/logo-cimes.png";
+  };
+  // Dispenser photos for the step-2 cards. Same root-relative rule as the products.
+  App.dispenserImage = function dispenserImage(kind) {
+    return "/assets/dispensers/" + (kind === "frio_calor" ? "frio-calor" : "natural") + ".webp";
+  };
+
+  // ---------- dispenser / water type ----------
+  // A comodato can't mix waters, so the chosen type decides which botellones the
+  // catalog offers. Frío/calor is an abono of 4x20L, so it only offers that one
+  // bottle; natural offers both sizes of the chosen water. Everything that isn't
+  // one of these four SKUs (soda, gaseosa, agua, saborizada) is always shown.
+  const BOTTLES = {
+    comun: ["Botellón 20L", "Botellón 12L"],
+    bajo_sodio: ["Botellón 20L Bajo Sodio", "Botellón 12L Bajo Sodio"],
+  };
+  const ALL_BOTTLES = BOTTLES.comun.concat(BOTTLES.bajo_sodio);
+
+  /** The 20L the abono's included bottles are drawn from (mirrors api/orders-cart.ts). */
+  App.abonoBottle = function abonoBottle(waterType) {
+    return waterType === "bajo_sodio" ? "Botellón 20L Bajo Sodio" : "Botellón 20L";
+  };
+  App.ABONO_INCLUDED_BOTTLES = 4;
+
+  /** The catalog as this dispenser + water choice is allowed to see it. */
+  App.visibleProducts = function visibleProducts(products, dispenser, waterType) {
+    if (!dispenser || dispenser === "ninguno") return products;
+    const allowed =
+      dispenser === "frio_calor"
+        ? [App.abonoBottle(waterType)]
+        : BOTTLES[waterType] || BOTTLES.comun;
+    return products.filter(
+      (p) => allowed.indexOf(p.name) >= 0 || ALL_BOTTLES.indexOf(p.name) < 0,
+    );
+  };
+
+  /** The frío/calor prices for the current water type, or null when unavailable. */
+  App.abonoPricing = function abonoPricing() {
+    if (!state.frioCalor) return null;
+    return state.frioCalor[state.waterType || "comun"] || null;
   };
 
   // ---------- mid-flow persistence: resume the furthest step after a reload of /alta ----------
@@ -51,7 +99,14 @@
     try {
       sessionStorage.setItem(
         "cimes_wizard",
-        JSON.stringify({ city: state.city, cart: state.cart, data: state.data, option: state.option }),
+        JSON.stringify({
+          city: state.city,
+          dispenser: state.dispenser,
+          waterType: state.waterType,
+          cart: state.cart,
+          data: state.data,
+          option: state.option,
+        }),
       );
     } catch (e) {}
   }
@@ -142,7 +197,7 @@
   App.loadingPanel = loadingPanel;
 
   App.coverageLoading = function coverageLoading() {
-    return progress(4) + `<h3>${W.dayStep.title}</h3>` + loadingPanel(W.dayStep.checking);
+    return progress(5) + `<h3>${W.dayStep.title}</h3>` + loadingPanel(W.dayStep.checking);
   };
 
   // Covered city, but nothing we can offer automatically (no serviceable slot, or the
@@ -167,11 +222,13 @@
         address: App.addressString(state.data),
         cross_streets: state.data.crossStreets,
         items: state.cart.map((c) => ({ product: c.name, qty: c.qty })),
+        dispenser: state.dispenser || undefined,
+        water_type: state.waterType || undefined,
         ...attribution,
       }),
     }).catch(() => {});
     root.innerHTML =
-      progress(4) +
+      progress(5) +
       `<h3>${W.manualReview.title}</h3>` +
       `<p class="status-msg">${W.manualReview.message}</p>` +
       `<div class="wizard-actions"><button class="btn btn-secondary" data-back="data">${W.back}</button>` +
@@ -185,16 +242,21 @@
     track("wizard_start", { city });
     const saved = loadState();
     if (saved && saved.city === city) {
+      state.dispenser = saved.dispenser || null;
+      state.waterType = saved.waterType || null;
       state.cart = saved.cart || null;
       state.data = saved.data || null;
       state.option = saved.option || null;
       const hasCart = state.cart && state.cart.length;
-      if (hasCart && state.data && state.option) App.steps.summary();
+      // The cart is only meaningful under the dispenser choice that filtered it,
+      // so a saved cart without one drops back to the dispenser step.
+      if (!state.dispenser) App.steps.dispenser();
+      else if (hasCart && state.data && state.option) App.steps.summary();
       else if (hasCart && state.data) App.steps.day();
       else if (hasCart) App.steps.data();
       else App.steps.product();
     } else {
-      App.steps.product();
+      App.steps.dispenser();
     }
   };
 })(window.CIMES_APP = window.CIMES_APP || {});

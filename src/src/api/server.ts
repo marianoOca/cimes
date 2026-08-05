@@ -16,6 +16,14 @@ import { confirmOrder, maybeSendWebConfirmation } from "../pipeline/orders.js";
 import { handleInstagramLead, verifyMetaSignature } from "./instagram.js";
 import { recordManualReviewLead } from "./manual-review.js";
 import { resolveCartLines } from "./orders-cart.js";
+import { frioCalorPricing } from "./frio-calor.js";
+import { getAbono } from "../providers/abonos.js";
+
+/** The wizard's dispenser step (04 §3). Optional — WhatsApp orders don't carry it. */
+const dispenserFields = {
+  dispenser: z.enum(["natural", "frio_calor", "ninguno"]).optional(),
+  water_type: z.enum(["comun", "bajo_sodio"]).optional(),
+};
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -38,10 +46,26 @@ export function buildServer(db: DB): FastifyInstance {
 
   // ---------- public REST (website + chatbot consumers) ----------
 
+  // `dispenser=frio_calor` switches to the comodato-only price list where the city
+  // has one. The `frio_calor` block is always computed from that list regardless,
+  // so the wizard's dispenser step can price both water types before the visitor
+  // has chosen anything. Null when this deployment can't price the abono there.
   app.get("/api/prices", async (req, reply) => {
-    const { city } = z.object({ city: z.string().min(1) }).parse(req.query);
-    const catalog = await getPriceProvider().getCatalog(city);
-    return { city, price_list: catalog.price_list, products: catalog.products };
+    const { city, dispenser } = z
+      .object({
+        city: z.string().min(1),
+        dispenser: z.enum(["natural", "frio_calor", "ninguno"]).optional(),
+      })
+      .parse(req.query);
+    const catalog = await getPriceProvider().getCatalog(city, {
+      frioCalor: dispenser === "frio_calor",
+    });
+    return {
+      city,
+      price_list: catalog.price_list,
+      products: catalog.products,
+      frio_calor: await frioCalorPricing(db, city),
+    };
   });
 
   // Full BA-city list for the website's "Otra ciudad" autocomplete dropdown.
@@ -109,9 +133,11 @@ export function buildServer(db: DB): FastifyInstance {
         city: z.string().min(1),
         address: z.string().min(1),
         cross_streets: z.string().optional(),
-        items: z
-          .array(z.object({ product: z.string().min(1), qty: z.number().int().positive() }))
-          .min(1),
+        // May be empty for a frío/calor abono, which is an order on its own.
+        items: z.array(
+          z.object({ product: z.string().min(1), qty: z.number().int().positive() }),
+        ),
+        ...dispenserFields,
         utm_source: z.string().optional(),
         utm_medium: z.string().optional(),
         utm_campaign: z.string().optional(),
@@ -157,6 +183,7 @@ export function buildServer(db: DB): FastifyInstance {
           .array(z.object({ product: z.string().min(1), qty: z.number().int().min(1) }))
           .min(1)
           .optional(),
+        ...dispenserFields,
         delivery_day: z.string().min(1),
         delivery_window: z.string().default(""),
         // Paid-social attribution (optional; captured client-side from the ad click).
@@ -168,9 +195,13 @@ export function buildServer(db: DB): FastifyInstance {
         fbclid: z.string().optional(),
         gclid: z.string().optional(),
       })
-      .refine((b) => Boolean(b.items?.length) || Boolean(b.product), {
-        message: "one of items or product is required",
-      })
+      // A frío/calor abono is a complete order by itself — the comodato is the
+      // purchase and it already includes the month's botellones.
+      .refine(
+        (b) =>
+          Boolean(b.items?.length) || Boolean(b.product) || b.dispenser === "frio_calor",
+        { message: "one of items or product is required" },
+      )
       .parse(req.body);
 
     const attribution = {
@@ -227,17 +258,24 @@ export function buildServer(db: DB): FastifyInstance {
       return reply.code(422).send({ error: "address_not_covered" });
     }
 
-    // Prices are deterministic by city (GENERAL / per-city exception), never the
-    // neighbor-derived list and never client-supplied. Multi-item cart is
-    // summarized to one line ("2x A, 1x B") + total; a single legacy `product`
-    // becomes a one-line, qty-1 cart.
-    const catalog = await getPriceProvider().getCatalog(body.city);
+    // Prices are deterministic by city (GENERAL / per-city exception / the
+    // frío-calor list), never the neighbor-derived list and never client-supplied.
+    // Multi-item cart is summarized to one line ("2x A, 1x B") + total; a single
+    // legacy `product` becomes a one-line, qty-1 cart.
+    const frioCalor = body.dispenser === "frio_calor";
+    const waterType = body.water_type ?? "comun";
+    // Same list the dispenser step quoted from, so shown == charged.
+    const catalog = await getPriceProvider().getCatalog(body.city, { frioCalor });
     lead = updateLead(db, lead.lead_id, {
       coverage_json: JSON.stringify(coverage),
       price_list: catalog.price_list,
     });
-    const cartItems = body.items ?? [{ product: body.product!, qty: 1 }];
-    const cart = resolveCartLines(catalog, cartItems);
+    const cartItems = body.items ?? (body.product ? [{ product: body.product, qty: 1 }] : []);
+    const cart = resolveCartLines(catalog, cartItems, {
+      dispenser: body.dispenser,
+      waterType,
+      abono: frioCalor ? getAbono(body.city, waterType, db) : null,
+    });
     if (!cart.ok) return reply.code(422).send({ error: cart.error });
     const option =
       coverage.delivery_options.find((o) => o.weekday === body.delivery_day.toLowerCase()) ??

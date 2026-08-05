@@ -8,7 +8,7 @@ This document owns: system summary, language policy, architecture & stack, the m
 
 ## 1. System summary
 
-Build a WhatsApp sales bot + internal CRM + public self-service website for CIMES, an Argentine water/soda home-delivery company serving Buenos Aires province (the cities Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana, Zárate, and Escobar are quick-pick shortcuts, but **any BA province city is served** — coverage is decided per-address by WaterService neighbours, not by a city list). The system takes a lead from first contact (WhatsApp, website, or Instagram lead form) through coverage check, price quote, and order confirmation, then **writes the confirmed order directly into WaterService** (the client's delivery-management system: creates the client record + a driver ticket) and mirrors it into a Google Sheet the operator reads each morning. A conversational AI (Claude) handles free-text understanding and FAQs; all deterministic work — prices, coverage, delivery days — is done by tools and providers, never by the model. A follow-up engine re-engages silent leads inside WhatsApp's free 24h window, and a debt-reminder engine sends visit-eve balance reminders. An internal CRM lets the operator watch conversations, take over from the AI, and label leads.
+Build a WhatsApp sales bot + internal CRM + public self-service website for CIMES, an Argentine water/soda home-delivery company serving Buenos Aires province (the cities Mercedes, Luján, San Andrés de Giles, San Antonio de Areco, Chivilcoy, Campana and Zárate are quick-pick shortcuts, but **any BA province city is served** — coverage is decided per-address by WaterService neighbours, not by a city list). The system takes a lead from first contact (WhatsApp, website, or Instagram lead form) through coverage check, price quote, and order confirmation, then **writes the confirmed order directly into WaterService** (the client's delivery-management system: creates the client record + a driver ticket) and mirrors it into a Google Sheet the operator reads each morning. A conversational AI (Claude) handles free-text understanding and FAQs; all deterministic work — prices, coverage, delivery days — is done by tools and providers, never by the model. A follow-up engine re-engages silent leads inside WhatsApp's free 24h window, and a debt-reminder engine sends visit-eve balance reminders. An internal CRM lets the operator watch conversations, take over from the AI, and label leads.
 
 ---
 
@@ -199,7 +199,7 @@ These are thin wrappers over core-api providers/endpoints: `get_prices` → Pric
 
 Just the contract here; `01-core-api.md` details the implementations.
 
-- **`PriceProvider`** — resolves prices. Swappable via `PRICES_SOURCE` (fully open — see §8). Implementations: WaterService price matrix (#10/#5) and a Google Sheet source. The AI reaches prices only through this provider.
+- **`PriceProvider`** — resolves prices from WaterService (#10 matrix, #11 abonos), mirrored into the `ws_price_cache` table by a daily cron; the request path reads only the cache, so a WaterService outage can't stop the wizard from quoting (`01-core-api.md §2`). The AI reaches prices only through this provider.
 - **`GeocodingProvider`** — resolves an address to coordinates. Default implementation = WaterService endpoint #12 (which geocodes and returns neighbors/coverage in one call). A Google Maps adapter sits behind the same interface, swappable via config/flag. No manual validation gate before build — assume #12 works, keep it swappable.
 
 ### 5.8 Event-log event types
@@ -272,8 +272,8 @@ All env vars, with the module that owns each. **Each module doc also lists its o
 | `DEBT_REMINDER_SEND_HOUR` | `09` | core-api | Morning send hour |
 | `PRICE_LIST_DEFAULT_ID` | — | core-api | Default price list (**LISTA PRECIOS GENERAL**) applied to every city unless overridden. Pricing is **city-deterministic** at every step (quote = charge); `resolveCityListId` falls back here for any unmapped city (never throws) |
 | `CITY_PRICE_LIST_MAP` | — | core-api | Per-city price-list **exceptions** (e.g. Lobos → PRECIO LOBOS). Cities not listed use `PRICE_LIST_DEFAULT_ID`. Not provisional — this is the list quoted *and* charged |
-| `PRICES_SOURCE` | *(none — fully open)* | core-api | Selects PriceProvider impl (`waterservice` \| `sheet`). No forced default — build the abstraction (§8 open item a) |
-| `PRICES_SHEET_ID` | — | core-api | Required if `PRICES_SOURCE=sheet` |
+| `FRIO_CALOR_CITY_PRICE_LIST_MAP` | `{}` | core-api | city → PRECIO CAMPANA ESPECIAL `lista_id`; applied **only** to a frío/calor customer |
+| `FRIO_CALOR_ABONO_MAP` | `{}` | core-api | resolved `lista_id` → `{comun, bajo_sodio}` abono **ids** (#11). Ids only — never prices |
 | `OPERATOR_PHONE` | — | core-api | Handoff / failure notifications to operator |
 | `API_BASE_URL` | — | website | Backend base URL the static site `fetch`es (§5.6) |
 | `CHATWOOT_BASE_URL` | — | crm | Self-hosted Chatwoot instance URL |
@@ -306,7 +306,7 @@ All env vars, with the module that owns each. **Each module doc also lists its o
 
 Only genuinely open items remain (geocoding validation and the inbox/CRM choice are **not** open — resolved: assume-and-abstract, and self-hosted Chatwoot (`03-crm.md`) respectively).
 
-- **(a) Price source of truth — FULLY OPEN.** `PRICES_SOURCE` selects the PriceProvider implementation (WaterService matrix #10/#5, or a Google Sheet). Build the `PriceProvider` abstraction so either works; **do not force a default.** The client confirms which source is maintained. If `sheet`, enable a daily sheet-vs-#10 consistency check with an operator alert on mismatch.
+- **(a) Price source of truth — CLOSED (2026-08).** WaterService only. Prices are mirrored into SQLite by the daily `prices_refresh` cron and served from there (`01-core-api.md §2`). The Google-Sheet price source is removed; the orders **mirror** sheet is unrelated and stays.
 - **(b) Coverage radius — SETTLED.** `COVERAGE_RADIUS_M=10000`. 10 km ≈ whole city, so it's effectively an off-switch until tightened later. One-line note only; no further discussion.
 - **(c) Website branding — SETTLED.** Copy the competitor site's design (https://aguaivess.rosmino.com.ar/) exactly for v1, with CIMES logo. Colors/imagery tuning happens after the first build. No redesign scope beyond that.
 - **(d) WaterService per-environment IDs — a phone call, not a blocker.** See the decision in §8: keep the drafted defaults; the client confirms real values with the vendor before/during build. No design work here.

@@ -88,6 +88,10 @@ a { color: inherit; text-decoration: none; }
 
 h1, h2, h3 { font-family: var(--font-head); color: var(--ink); line-height: 1.15; }
 
+/* Emphasis inside copy: `**así**` in copy.es-AR.js becomes <strong> (js/util.js
+   `rich`). One look for it site-wide — brand blue, bold. */
+strong { font-weight: 700; color: var(--blue); }
+
 .skip-link {
   position: absolute; left: 50%; top: -60px; transform: translateX(-50%);
   background: var(--red); color: #fff; padding: 0.6rem 1.1rem; border-radius: 0 0 10px 10px;
@@ -393,7 +397,6 @@ main > section h2::after {
   font-size: 0.92rem; color: var(--muted); margin-bottom: 1.1rem;
   padding-bottom: 0.85rem; border-bottom: 1px dashed var(--border);
 }
-.wizard-city strong { color: var(--blue); }
 
 .wizard-actions { display: flex; gap: 0.6rem; justify-content: space-between; margin-top: 1.3rem; }
 .wizard-actions .btn { flex: 1; }
@@ -405,8 +408,133 @@ main > section h2::after {
 .summary-list span:last-child { font-weight: 600; color: var(--ink); text-align: right; }
 .summary-list .summary-total span:first-child { color: var(--ink); font-weight: 700; }
 .summary-list .summary-total span:last-child { color: var(--blue); }
+/* Products vs abono, broken out above the total (frío/calor only). */
+.summary-list .summary-subtotal span:first-child { color: var(--slate); font-weight: 600; }
+.summary-list .summary-note { padding-top: 0; border-bottom: none; }
+.summary-list .summary-note span { font-size: 0.78rem; line-height: 1.45; color: var(--muted); }
 
-/* ---------- multi-item product cart (wizard step 2) ---------- */
+/* ---------- dispenser picker (wizard step 2) ----------
+   Two cards side by side plus a full-width third. Unlike the city/day lists
+   these do NOT advance on click — the visitor picks a card, optionally switches
+   the water toggle, then presses Siguiente. So this is the one place in the
+   wizard that needs a persistent selected state.
+
+   The card is a <div> with a restyled radio inside, never a <button>: it
+   contains the water toggle, and a button inside a button is invalid HTML —
+   the parser closes the outer one and the toggle spills out of the card. */
+
+/* Two rich cards don't fit the wizard's normal 540px column. */
+.wizard-card:has(.dispenser-grid) { max-width: 880px; }
+
+.dispenser-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-bottom: 0.9rem;
+}
+.dispenser-card {
+  display: flex; flex-direction: column; align-items: stretch; gap: 0.7rem;
+  text-align: left; cursor: pointer;
+  border: 1.5px solid var(--border); border-radius: var(--radius-lg);
+  padding: 1.2rem; background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.dispenser-card:hover { border-color: var(--celeste-100); transform: translateY(-2px); box-shadow: var(--shadow-celeste); }
+.dispenser-card.selected {
+  border-color: var(--celeste); box-shadow: 0 0 0 3px rgba(var(--celeste-rgb), 0.18);
+}
+/* The profit product: tinted so it reads as the recommendation, not an equal. */
+.dispenser-card-promo { background: linear-gradient(180deg, var(--celeste-050), #fff 55%); }
+.dispenser-card-wide { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 1.2rem; }
+.dispenser-card-wide .dispenser-head { flex: none; }
+.dispenser-card-wide .dispenser-body { margin: 0; }
+
+.dispenser-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.55rem; cursor: pointer; }
+.dispenser-title { font-size: 1.05rem; font-weight: 700; color: var(--blue); }
+/* The hero `.badge` is white-on-translucent for a dark photo — invisible on a
+   white card. These two are the light-surface variants, and they carry no icon. */
+.dispenser-head .badge {
+  padding: 0.22rem 0.6rem; font-size: 0.72rem; font-weight: 700;
+  letter-spacing: 0.02em; text-transform: uppercase; backdrop-filter: none;
+}
+.dispenser-head .badge::before { content: none; }
+.badge-free { background: var(--celeste-050); border-color: var(--celeste-100); color: var(--blue); }
+.badge-promo { background: var(--red); border-color: var(--red); color: #fff; }
+/* Real radio, restyled — keeps arrow-key navigation and screen-reader semantics. */
+.dispenser-radio {
+  appearance: none; -webkit-appearance: none; margin: 0; flex: none; cursor: pointer;
+  width: 20px; height: 20px; border-radius: 50%; background: #fff;
+  border: 2px solid var(--border); transition: border-color 0.15s, box-shadow 0.15s;
+}
+.dispenser-radio:checked { border-color: var(--celeste); box-shadow: inset 0 0 0 4px var(--celeste); }
+.dispenser-radio:focus-visible { outline: 2px solid var(--celeste-2); outline-offset: 2px; }
+
+.dispenser-body { color: var(--body); font-size: 0.9rem; line-height: 1.5; }
+.dispenser-points { list-style: none; display: grid; gap: 0.35rem; }
+.dispenser-points li {
+  position: relative; padding-left: 1.15rem; color: var(--body);
+  font-size: 0.88rem; line-height: 1.45;
+}
+.dispenser-points li::before {
+  content: ""; position: absolute; left: 0; top: 0.52em; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--celeste);
+}
+/* The two surprises (flat fee, excedente) — present, not shouted. */
+.dispenser-fine { color: var(--muted); font-size: 0.75rem; line-height: 1.45; }
+
+/* Bottom row: photo beside the water choice, pushed down so both cards align
+   however long their copy runs (the reference's mt-auto). */
+.dispenser-media {
+  display: flex; align-items: flex-end; gap: 0.9rem; margin-top: auto; padding-top: 0.4rem;
+}
+.dispenser-img {
+  width: 108px; height: 150px; object-fit: contain; object-position: bottom; flex: none;
+}
+.water-pick { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; flex: 1; }
+.water-label { font-size: 0.78rem; font-weight: 700; color: var(--slate); }
+
+/* Segmented control, not two loose buttons: one pill track, the active segment
+   filled. Reads as a switch at a glance. */
+.water-toggle {
+  display: flex; padding: 3px; gap: 2px; border-radius: 999px;
+  background: var(--celeste-050); border: 1px solid var(--celeste-100);
+}
+.water-toggle button {
+  flex: 1; min-width: 0; border: none; background: transparent; border-radius: 999px;
+  font: inherit; font-size: 0.78rem; font-weight: 700; color: var(--body);
+  padding: 0.42rem 0.5rem; cursor: pointer; white-space: nowrap;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.water-toggle button:hover { color: var(--blue-dark); }
+.water-toggle button[aria-checked="true"] {
+  background: var(--celeste); color: #fff; box-shadow: 0 1px 4px rgba(var(--celeste-rgb), 0.45);
+}
+.water-toggle button:focus-visible { outline: 2px solid var(--celeste-2); outline-offset: 1px; }
+
+/* Step-level validation message, matching the field-level .error contract. */
+.step-error { color: var(--error); font-size: 0.85rem; margin-bottom: 0.6rem; }
+
+@media (max-width: 720px) {
+  .dispenser-grid { grid-template-columns: 1fr; }
+  .dispenser-card-wide { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+
+  /* One column per card: the photo beside the toggle would squeeze it, so the photo
+     becomes a washed-out watermark behind the card and the toggle takes the row.
+     `.dispenser-media` stays unpositioned so the photo anchors to the card. */
+  .dispenser-card { position: relative; overflow: hidden; }
+  .dispenser-media { display: block; padding-top: 0.2rem; }
+  .dispenser-img {
+    position: absolute; right: 0; bottom: 0; width: 48%; height: 82%;
+    max-width: 200px; object-position: bottom right;
+    /* Washed out, and faded further towards the text so the copy stays first. */
+    opacity: 0.25; filter: saturate(0.45); pointer-events: none;
+    -webkit-mask-image: linear-gradient(to left, #000 45%, transparent);
+    mask-image: linear-gradient(to left, #000 45%, transparent);
+  }
+  /* Text sits above the watermark (the photo is positioned, so it would win ties). */
+  .dispenser-head, .dispenser-points, .dispenser-body, .dispenser-fine, .water-pick {
+    position: relative; z-index: 1;
+  }
+}
+
+/* ---------- multi-item product cart (wizard step 3) ---------- */
 .wizard-cart { display: grid; gap: 0.9rem; margin-bottom: 1.2rem; grid-template-columns: repeat(2, 1fr); }
 @media (max-width: 460px) { .wizard-cart { grid-template-columns: 1fr; } }
 .cart-card {
@@ -422,6 +550,8 @@ main > section h2::after {
 .cart-card .product-img img { width: auto; height: 100%; max-width: 100%; object-fit: contain; }
 .cart-name { font-size: 0.9rem; color: var(--slate); line-height: 1.25; }
 .cart-price { font-weight: 700; color: var(--blue); font-variant-numeric: tabular-nums; }
+/* Bottles the frío/calor abono already covers. */
+.cart-included { font-size: 0.75rem; font-weight: 700; color: var(--celeste-2); }
 .qty-stepper { display: flex; align-items: center; gap: 0.6rem; margin-top: auto; padding-top: 0.4rem; }
 .qty-stepper .qty { min-width: 1.4rem; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
 .qty-btn {

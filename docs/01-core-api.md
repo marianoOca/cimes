@@ -38,8 +38,8 @@ Endpoint numbers (#1, #2, #3, #6, #7, #10, #12, #21, #28 …) refer to the **Wat
 | 12 | `GET /Repartos/BusquedaClientesCercanosResultJson` `{address, metros}` | **Primary coverage tool and default `GeocodingProvider` implementation.** Geocodes the address itself (returns `coordenadas`) and lists neighbors, each with `listaDePrecios_id`, `visitas[]` (`dia`, `reparto_id`, `nombreReparto`), `ultimasVisitas` (`horarioMin/Max/Prom`, `cantidadVisitas`), `proximaVisita`, `diasProximaVisita`. **One call resolves: coverage, route, weekday, time window, price list, and coordinates for the alta.** Google Geocoding not required (kept only as a swappable adapter — see §3). `metros` = `COVERAGE_RADIUS_M`. |
 | 4 | `GET /Repartos/ObtenerClientesCercanosPorCoordenadas` `{excluir, latitud, longitud, radioMetros}` | Same data, keyed by coordinates. Fallback/secondary — use when you already hold coordinates (e.g. from the Google Maps geocoding adapter) instead of a raw address string. |
 | 5 | `GET /ListaDePrecios/ObtenerListaDePreciosDeCliente` `{ClienteId}` | Article→price map of a specific (nearest) client's list. Used by `PriceProvider` (waterservice impl) to resolve the exact prices for a specific `listaDePrecios_id`. |
-| 10 | `GET /ListaDePrecios/ObtenerMatrizListaDePrecios` `{tipoLista_id}` | Full price matrix + list names. Load at startup, refresh daily; cache only the **resolved** list into the AI prompt per conversation (never two cities' lists at once). Also the reference used by the daily sheet-consistency check when `PRICES_SOURCE=sheet`. |
-| 11 | `GET /AbonosTipos/ObtenerAbonosTipos` `{activo: true}` | Frío/calor subscription types + prices (`nombreAbono`, `precio`, `leyendaFacturacion`). Feeds product/quote answers about dispenser rental. |
+| 10 | `GET /ListaDePrecios/ObtenerMatrizListaDePrecios` `{tipoLista_id}` | Full price matrix + list names. Read **only** by the daily `prices_refresh` job, which mirrors every configured list into `ws_price_cache` (§2); the request path reads the cache. Cache only the **resolved** list into the AI prompt per conversation (never two cities' lists at once). |
+| 11 | `GET /AbonosTipos/ObtenerAbonosTipos` `{activo: true}` | Frío/calor subscription types + prices (`nombreAbono`, `precio`, `leyendaFacturacion`). **Wired** — read by `prices_refresh` into `ws_price_cache` and served by `providers/abonos.ts` (§2.1). The only source of abono amounts; none are stored in this repo. |
 | 2 | `POST /api/Clientes/BusquedaRapidaResultJson` `{telefono \| datosCliente \| dni \| domicilio}` | Existing-client lookup **by phone**. Returns `fechaProximaVisita1/2/3`, `usuarioRepartidorHabitual`, `reparto_id`, `etiquetas`. Powers (a) **dedupe before #6** and (b) the support line ("¿cuándo pasa el repartidor?" answered from data). |
 | 8 | `POST /api/Clientes/ObtenerDatosCliente` `{cliente_id}` | Client detail incl. `diaProximaVisita1-3`. Use when you already have a `cliente_id` and need full detail. |
 | 6 | `POST /Clientes/CrearNuevoClientePorChatBot` | **Purpose-built for this bot. The alta.** Payload: `cliente {nombre, tipoDeClienteId: 1 (Familia), actividadId: 15 (Consumidor final), condicionIvaId: 2 (Consumidor Final), telefono, email, listaDePreciosId, reparto_id, domicilio {provincia, ciudad, calle, puerta, piso, depto, observaciones, cp, latitud, longitud}}`. `reparto_id` and `latitud`/`longitud` **come from the #12 response** (do not re-derive them); **`listaDePreciosId` comes from the city rule** (`resolveCityListId` — §2, not #12), so the client is assigned the same list they were quoted and charged. Creates the client in **`Borrador`** state → returns `cliente_id`. Note: no flow collects `email` — send it empty/null; raise with the vendor only if #6 rejects that. |
@@ -61,25 +61,46 @@ Endpoint numbers (#1, #2, #3, #6, #7, #10, #12, #21, #28 …) refer to the **Wat
 
 ---
 
-## 2. `PriceProvider` interface (PRICES_SOURCE — FULLY OPEN, no forced default)
+## 2. `PriceProvider` interface (WaterService only, mirrored into SQLite)
 
-The AI reaches prices **only** through this provider (guardrail §13). No hardcoded or model-recalled prices, ever. The provider is **fully swappable** via `PRICES_SOURCE`; **do not force a default** — this is a genuinely open item (`00-master.md §10a`). Build the abstraction so either implementation drops in cleanly.
+The AI reaches prices **only** through this provider (guardrail §13). No hardcoded or model-recalled prices, ever.
 
 ```
 interface PriceProvider {
   // catalog + prices for a given city (list resolved via resolveCityListId; never mixes two cities' lists)
-  getCatalog(city: string): Promise<PricedCatalog>;
+  // frioCalor switches to the comodato-only list where the city has one
+  getCatalog(city: string, opts?: { frioCalor?: boolean }): Promise<PricedCatalog>;
   // resolve prices for a specific WaterService price-list id
   getPricesForList(listaDePreciosId: string): Promise<PricedCatalog>;
 }
 ```
 
-**Implementations selected by `PRICES_SOURCE`:**
+**WaterService is the only source** (`00-master.md §10a` is closed; the Google-Sheet implementation and `PRICES_SOURCE`/`PRICES_SHEET_ID` are gone). The **orders mirror** sheet is unrelated and unaffected.
 
-- **`waterservice`** — prices from WaterService. `getCatalog(city)` resolves the city's list id (`resolveCityListId`) then reads its prices; `getPricesForList` → #5 for a given list id; full matrix + list names via #10 (loaded at startup, refreshed daily). Abono types via #11.
-- **`sheet`** — prices from a Google Sheet (`PRICES_SHEET_ID`), refreshed roughly every ~15 min. When this impl is active, run a **daily consistency check against #10** and, on any mismatch, raise an **operator alert** (to `OPERATOR_PHONE`). The client confirms which source is the maintained one.
+**The request path never calls WaterService.** Prices live in the `ws_price_cache` table (`db/prices-cache.ts`), refreshed daily by the **`prices_refresh`** job. This is not an optimization — an outage that makes `/api/prices` throw dead-ends the wizard, and *a quote we can't produce is a lead we never save*. Rules:
 
-**City-deterministic pricing (no provisional/final split).** The price list for a city is resolved by **`resolveCityListId(city)`**: `CITY_PRICE_LIST_MAP[city]` if the city has an exception (e.g. Lobos → PRECIO LOBOS), otherwise **`PRICE_LIST_DEFAULT_ID`** (LISTA PRECIOS GENERAL). **`resolveCityListId` never throws for an unmapped city — it falls back to the default.** The same list is used at the `producto` quote *and* at `POST /api/orders`, so **the shown price equals the charged price**. Coverage (#12) no longer influences pricing — there is no re-quote from neighbors' `listaDePrecios_id`.
+- **Read** = cache. The one live call left on the read path is a cache **miss** (cold DB after a deploy, or a list id the cron hasn't seen), which fetches #10 once and writes through.
+- **Stale rows are served as-is.** A slightly old price beats no price. Staleness surfaces as an operator alert (>48h since the oldest row), never as a failure.
+- **A failed refresh never deletes.** Last-good rows keep serving; the operator is pinged.
+- Both `/api/prices` and `POST /api/orders` read the same rows, so quoted still equals charged.
+
+**City-deterministic pricing (no provisional/final split).** The price list for a city is resolved by **`resolveCityListId(city, {frioCalor})`**:
+
+1. **`FRIO_CALOR_CITY_PRICE_LIST_MAP[city]`** when `frioCalor` — PRECIO CAMPANA ESPECIAL (Zárate, Campana, Escobar). **This list exists only for the comodato:** the same city buying loose bottles must still fall through to the normal rule.
+2. `CITY_PRICE_LIST_MAP[city]` for a per-city exception (Lobos → PRECIO LOBOS).
+3. Otherwise **`PRICE_LIST_DEFAULT_ID`** (LISTA PRECIOS GENERAL).
+
+**Only three lists exist** — `LISTA PRECIOS GENERAL` (6), `PRECIO LOBOS` (9), `PRECIO CAMPANA ESPECIAL` (11); every other list in the matrix is ignored. The same 9 SKUs are sold in every city, and the two zone lists price only what differs there: live, Lobos has no rows for the four descartables and CAMPANA ESPECIAL prices only the two 20L botellones. So **GENERAL is the fallback for any SKU the resolved list doesn't price** — a missing row takes the GENERAL price instead of hiding the product. `price_list` in the response stays the resolved id.
+
+Consequence for the daily gap check: **only GENERAL must carry all 9** (a hole there is a hole everywhere). Partial zone lists are the expected shape and don't alert; a zone list that can't be resolved at all still does.
+
+**`resolveCityListId` never throws for an unmapped city — it falls back to the default.** The same list is used at the `producto` quote *and* at `POST /api/orders`. Coverage (#12) no longer influences pricing — there is no re-quote from neighbors' `listaDePrecios_id`.
+
+### 2.1 Frío/calor abonos (#11)
+
+`providers/abonos.ts` — `getAbono(city, waterType)`. **Ids in env, amounts from WaterService.** `FRIO_CALOR_ABONO_MAP` maps a *resolved price list* → the abono id for each water type, so the abono automatically follows whichever list the resolver picked; the `precio` comes from #11 via the cache. Six abonos today: GENERAL 1/7, CAMPANA ESPECIAL 11/12, LOBOS 13/17. `getAbono` returns **null** rather than guessing when the id is unconfigured or uncached — callers hide the frío/calor option instead of quoting a number they can't stand behind.
+
+**Order pricing** (`api/orders-cart.ts`): every abono is "4 botellones de 20 lts", so the first `ABONO_INCLUDED_BOTTLES` units of the chosen water's 20L bill at **0** and the 5th onward at that list's normal 20L price — the excedente is not a separate stored number. The abono itself is a **synthetic** line at half price (PROMO 1, first month), deliberately bypassing the catalog lookup that would reject it as `unknown_product`. Its `ABONO_LINE_MARKER` prefix is what makes the row `client_type = frio_calor` downstream (`sheets/orders.ts`) — a frío/calor order always carries botellones too, so the SKU scan alone would misread it as `bidon`. A frío/calor abono is a **complete order on its own**: `items` may be empty.
 
 ---
 
@@ -403,7 +424,7 @@ This module **owns the data model and the auto-apply rules**; `03-crm.md` owns f
 > **Defaults assumed from the manual's example environment (`WS_INCIDENT_TYPE_ID=1`, `WS_INCIDENT_SUBTYPE_ID=28`, and the per-city `WS_CENTRO_DISTRIBUCION_MAP` / severity / driver-vs-group assignment). The client will confirm the real values with the WaterService vendor before/during build — no further design work needed here, just use the configured values.** Do not build a vendor-confirmation workflow; it is a phone call.
 
 **Open items owned or touched by this module:**
-- **(a) Price source of truth — FULLY OPEN.** `PRICES_SOURCE` selects the `PriceProvider` impl (`waterservice` #10/#5, or `sheet`). Build the abstraction so either works; **do not force a default.** If `sheet`, run the daily sheet-vs-#10 consistency check with an operator alert on mismatch.
+- **(a) Price source of truth — CLOSED.** WaterService (#10 lists, #11 abonos), mirrored into `ws_price_cache` by the daily `prices_refresh` job; the request path reads only the cache (§2). The Google-Sheet implementation is removed.
 - **(b) Coverage radius — SETTLED.** `COVERAGE_RADIUS_M=10000`. 10 km ≈ whole city, so effectively an off-switch until tightened later. One line, no further discussion.
 - **(d) WaterService per-environment IDs — a phone call, not a blocker.** See the driver-ticket note above.
 - **(e) Vendor items to confirm at setup (not design blockers):** real price-list count + `tipoLista_id`s (the call mentioned only Mercedes + Campana — pull the full matrix via #10 and confirm); whether frío/calor abono debt surfaces in #28/#21 balances (`facturacionAutomatica` — §8); rate limits (undocumented); webhooks PDF pending (manual covers REST only).
@@ -452,8 +473,8 @@ Subset of the master table (`00-master.md §8`); that table is the single source
 | `DEBT_REMINDER_SEND_HOUR` | `09` | Morning send hour |
 | `PRICE_LIST_DEFAULT_ID` | — | Default price list (LISTA PRECIOS GENERAL) applied to every city unless overridden; `resolveCityListId` falls back here for unmapped cities (never throws) |
 | `CITY_PRICE_LIST_MAP` | — | Per-city price-list **exceptions** (e.g. Lobos → PRECIO LOBOS); cities not listed use `PRICE_LIST_DEFAULT_ID`. City-deterministic — quoted *and* charged |
-| `PRICES_SOURCE` | *(none — fully open)* | Selects `PriceProvider` impl (`waterservice` \| `sheet`). No forced default |
-| `PRICES_SHEET_ID` | — | Required if `PRICES_SOURCE=sheet` |
+| `FRIO_CALOR_CITY_PRICE_LIST_MAP` | `{}` | city → PRECIO CAMPANA ESPECIAL `lista_id`, applied **only** when the customer takes a frío/calor dispenser (§2) |
+| `FRIO_CALOR_ABONO_MAP` | `{}` | resolved `lista_id` → `{comun, bajo_sodio}` abono **ids** (#11). Ids only — amounts always come from WaterService (§2.1) |
 | `OPERATOR_PHONE` | — | Handoff / failure / sheet-mismatch notifications to operator |
 | `WEB_CONFIRMATION_TEMPLATE` | `false` | Optional utility template confirming a web order (pipeline decides; sent via chatbot layer) |
 

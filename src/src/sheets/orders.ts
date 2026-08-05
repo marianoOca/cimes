@@ -5,6 +5,9 @@ import { JWT } from "google-auth-library";
 import { config } from "../config.js";
 import type { Lead } from "../db/leads.js";
 import type { Order } from "../db/orders.js";
+import { SKUS } from "../catalog/skus.js";
+import { ABONO_LINE_MARKER } from "../api/orders-cart.js";
+import { normalizeText } from "../text.js";
 
 export const SHEET_COLUMNS = [
   "timestamp",
@@ -30,6 +33,18 @@ export const SHEET_COLUMNS = [
 ] as const;
 
 export function clientTypeOf(product: string): "frio_calor" | "bidon" | "soda" {
+  const summary = normalizeText(product);
+  // An abono line wins over the bottles beside it: a frío/calor order always
+  // also carries botellones, so the SKU scan below would misread it as `bidon`.
+  if (summary.includes(ABONO_LINE_MARKER)) return "frio_calor";
+  // Multi-item carts arrive as a summary ("2x Botellón 20L, 1x Gaseosa 2L"), so
+  // take the first catalog SKU named in the string. Longest display name first:
+  // "Botellón 20L" is a prefix of "Botellón 20L Bajo Sodio".
+  const sku = [...SKUS]
+    .sort((a, b) => b.display.length - a.display.length)
+    .find((s) => summary.includes(normalizeText(s.display)));
+  if (sku) return sku.clientType;
+  // Fallback for legacy rows and the free-text confirm_order path.
   const p = product.toLowerCase();
   if (p.includes("dispenser") || p.includes("frio") || p.includes("frío") || p.includes("calor"))
     return "frio_calor";

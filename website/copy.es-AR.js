@@ -43,13 +43,13 @@ window.CIMES_COPY = {
     note: "Los precios varían según tu ciudad: consultalos en el alta automática o por WhatsApp.",
     ctaLabel: "Consultar por WhatsApp",
     items: [
-      { name: "Bidón Retornable", description: "20 y 12 litros: para cuando el de 12 te pareció poco compromiso.", image: "botellon-20l.webp" },
-      { name: "Bidón Menos Sodio", description: "20 y 12 litros, Baja en sodio, alta en autoestima. Tu médico va a estar orgulloso.", image: "botellon-12l-ms.webp" },
-      { name: "Soda en Sifón", description: "1.5 L. Retornable. El sifón de toda la vida, para hacerte el gracioso en la sobremesa.", image: "soda-sifon.webp" },
-      { name: "Agua Saborizada", description: "1.5 L. Agua disfrazada de premio para que los chicos no se den cuenta.", image: "saborizada.webp" },
-      { name: "Gaseosas", description: "2 L litros para el asado donde nunca falta nadie, salvo la dieta.", image: "gaseosas.webp" },
-      { name: "Agua en Botellas", description: "2 L. Para cuando ni al bidón le tenés la paciencia de servir con vaso.", image: "agua-botellas.webp" },
-      { name: "Cimes Plus Isotónica", description: "750 ml (tipo powerade)", image: "isotonica.webp" },
+      { name: "Bidón Retornable", description: "20 ó 12 litros, agua pura y fresca, cuidada, directo a tu mesa.", image: "botellon-20l.webp" },
+      { name: "Bidón Menos Sodio", description: "20 ó 12 litros, la misma calidad de siempre, ahora baja en sodio.", image: "botellon-12l-ms.webp" },
+      { name: "Soda en Sifón", description: "1.5 L, retornable y eco-firedly, el clásico de toda mesa Argentina.", image: "soda-sifon.webp" },
+      { name: "Agua Saborizada", description: "1.5 L de pura frescura! Sabores naranja, pomelo, manzana, multifruta y citrus.", image: "saborizada.webp" },
+      { name: "Gaseosas", description: "2 L, infaltables en tu mesa! Sabores cola, pomelo, tónica, lima limón y naranja.", image: "gaseosas.webp" },
+      { name: "Agua en Botellas", description: "2 L, la misma pureza que conocés, lista para acompañarte a donde vayas!", image: "agua-botellas.webp" },
+      { name: "Cimes Plus Isotónica", description: "750 mL, lo mejor para el entreno! Sabores frutas tropicales, manzana y cold blue.", image: "isotonica.webp" },
       // TODO: agegar sabores para saborizada, gaseosa e isotónica
     ],
   },
@@ -76,18 +76,42 @@ window.CIMES_COPY = {
       "Chivilcoy",
       "Campana",
       "Zárate",
-      "Escobar",
     ],
     // Argentine mobile area codes per covered city (for the phone-field prefill/mask).
     areaCodes: {
-      "Mercedes": "2324",
+      "Agote": "2324",
+      "Altamira": "2324",
+      "Belén de Escobar": "348",
+      "Campana": "3489",
+      "Capilla del Señor": "2323",
+      "Capitán Sarmiento": "2478",
+      "Carlos Keen": "2323",
+      "Carmen de Areco": "2273",
+      "Chivilcoy": "2346",
+      "Fátima": "230",
+      "Gowland": "2324",
+      "José María Jauregui": "2323",
+      "General Las Heras": "220",
+      "Lobos": "2227",
+      "Loma Verde": "348",
+      "Los Cardales": "3489",
       "Luján": "2323",
+      "Manzanares": "230",
+      "Mercedes": "2324",
+      "Navarro": "2272",
+      "Olivera": "2323",
+      "Open Door": "2323",
+      "Parada Robles": "2323",
+      "Pilar": "230",
+      "Pueblo Nuevo": "2285",
       "San Andrés de Giles": "2325",
       "San Antonio de Areco": "2326",
-      "Chivilcoy": "2346",
-      "Campana": "3489",
-      "Zárate": "3487",
-      "Escobar": "0348",
+      "Suipacha": "2324",
+      "Tomás Jofré": "2324",
+      "Torres": "2323",
+      "Villa Lía": "2326",
+      "Villa Ruiz": "2323",
+      "Zárate": "3487"
     },
   },
   footer: {
@@ -102,10 +126,10 @@ window.CIMES_COPY = {
   },
   wizard: {
     title: "Alta automática",
-    subtitle: "2 minutos, 5 simples pasos.",
+    subtitle: "2 minutos, 6 simples pasos.",
     // Numbered stepper labels (progress bar), one per wizard step.
-    steps: ["Ciudad", "Productos", "Datos", "Envío", "Resumen"],
-    stepOf: (n) => `Paso ${n} de 5`,
+    steps: ["Ciudad", "Dispenser", "Productos", "Datos", "Envío", "Resumen"],
+    stepOf: (n) => `Paso ${n} de 6`,
     waFallback: "Probá escribinos por WhatsApp",
     successHint: "Guardá esta confirmación. Ante cualquier duda, escribinos por WhatsApp.",
     // Shortcut cities are the quick picks; "other" is the free-text entry that
@@ -123,11 +147,65 @@ window.CIMES_COPY = {
       didYouMean: "¿Quisiste decir…?",
       proceedAnyway: (city) => `Continuar igual con «${city}»`,
     },
+    // Step 2. Two decisions on one screen: which dispenser (or none) and which
+    // water. The water choice filters the catalog on the next step — común and
+    // bajo en sodio can't be mixed on a comodato — and sets the abono price.
+    // Every number here comes from the API's `frio_calor` block; nothing about
+    // prices is written in this file.
+    dispenserStep: {
+      title: "¿Querés un dispenser?",
+      // Comodato is the one idea both cards share; maintenance belongs to the
+      // frío/calor card only (the natural has no electronics to service).
+      intro: "Te prestamos el dispenser en comodato, lo disfrutas sin costo.",
+      waterLabel: "¿Qué agua tomás?",
+      water: { comun: "Común", bajo_sodio: "Bajo en sodio" },
+      continue: "Siguiente",
+      frioCalor: {
+        title: "Dispenser Frío/Calor",
+        badge: "50% OFF el primer mes",
+        // `abono` = full monthly price, `first` = what they pay on delivery day.
+        // First line is the price line. Said here and in the summary, nowhere else.
+        body: (bottles, abono, first) => [
+          `**${first}** el primer mes, luego ${abono}.`,
+          `Incluye ${bottles} botellones de 20L todos los meses.`,
+          "Frío y calor al instante.",
+          "Mantenimiento y service, por nuestra cuenta.",
+        ],
+        // The things people are surprised by later, said up front. The first one
+        // is the big one: the included botellones are a monthly allowance, not a
+        // single drop-off. Deliberately says nothing about visit frequency.
+        fine: (bottles, excedente) =>
+          `Tarifa fija: se cobra completa aunque consumas menos de ${bottles}. ` +
+          `Del ${bottles + 1}º botellón en adelante, ${excedente} cada uno. Se abona del 1 al 10.`,
+      },
+      natural: {
+        title: "Dispenser Natural",
+        badge: "GRATIS",
+        // No electronics in it, so nothing about maintenance or service here — the
+        // selling point is the opposite: nothing to plug in, nothing to pay.
+        body: [
+          "Sin cargo: pagás solo los botellones.",
+          "Agua a temperatura ambiente.",
+          "No se enchufa: ponelo donde quieras.",
+        ],
+      },
+      ninguno: {
+        title: "Sin dispenser",
+        body: "Me interesan **otros productos** y no preciso dispenser.",
+      },
+      errors: { required: "Por favor, elija una opción para continuar." },
+    },
     productStep: {
       title: "Elegí tus productos",
       loading: "Buscando los precios de tu ciudad…",
       continue: "Continuar",
       total: "Total",
+      // With an abono this step only totals the products; the abono joins them at
+      // the summary, so the bar says subtotal rather than pretending to be a total.
+      subtotalProducts: "Subtotal productos",
+      // On the card of the botellón the abono covers: says the listed price only
+      // starts applying once those are used up.
+      included: (n) => `primeros ${n} incluidos`,
     },
     dataStep: {
       title: "Tus datos de entrega",
@@ -174,8 +252,19 @@ window.CIMES_COPY = {
       product: "Producto",
       price: "Precio",
       total: "Total",
+      // With a frío/calor abono the total isn't just the products: the first
+      // (discounted) month is collected on delivery day too, so the two are
+      // broken out before the total rather than silently added together.
+      totalOnDelivery: "Total a pagar en la entrega",
+      subtotalProducts: "Subtotal productos",
+      included: "Incluido",
+      // Restated at confirmation: the included botellones are a monthly
+      // allowance, not one delivery. Same promise as the card's fine print.
+      abonoNote: (bottles) =>
+        `Los ${bottles} botellones incluidos son el total del mes y te los vamos dejando a medida que los consumís.`,
       address: "Dirección",
       day: "Entrega",
+      dispenser: "Dispenser",
       confirm: "Confirmar pedido",
       sending: "Enviando…",
     },
